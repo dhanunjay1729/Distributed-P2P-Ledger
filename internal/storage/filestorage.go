@@ -12,6 +12,7 @@ func NewFileStorage(path string) *FileStorage {
 
 func (f *FileStorage) LoadTransactions() ([]models.Transaction, error) {
 	// TODO: read from file
+	
 	return nil, nil
 }
 
