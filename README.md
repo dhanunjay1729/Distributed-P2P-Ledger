@@ -1,9 +1,10 @@
-RUN TESTS IN TERMINAL FOR API TESTING USINNG MAKEFILE
-command :
-makefile
+### Running API Tests
 
+To run all tests for the project, use the following command in your terminal:
 
-
+```bash
+make test
+```
 
 Exact problem statement 
 
