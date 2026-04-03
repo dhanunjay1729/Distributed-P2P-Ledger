@@ -7,9 +7,9 @@ services:
     ports:
       - "8001:8000"
     environment:
-    - NODE_ID=node1
-    - PORT=8000
-    - PEERS=http://node2:8000,http://node3:8000
+      - NODE_ID=node1
+      - PORT=8000
+      - PEERS=http://node2:8000,http://node3:8000
     networks:
       - gossip-net
   node2:
