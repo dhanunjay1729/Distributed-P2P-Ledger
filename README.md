@@ -1,3 +1,10 @@
+RUN TESTS IN TERMINAL FOR API TESTING USINNG MAKEFILE
+command :
+makefile
+
+
+
+
 Exact problem statement 
 
 Simplified P2P Ledger via Gossip and Consensus
