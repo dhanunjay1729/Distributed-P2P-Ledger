@@ -1,1 +1,13 @@
+# Environment variables
 .env
+
+# Node binary / executables
+Node -A/Node.go
+
+# Internal test JSON files
+/internal/api/*.json
+/internal/storage/*.json
+
+# Optional: OS or editor files
+*.swp
+*.DS_Store

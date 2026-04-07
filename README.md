@@ -1,3 +1,11 @@
+### Running API Tests
+
+To run all tests for the project, use the following command in your terminal:
+
+```bash
+make test
+```
+
 Exact problem statement 
 
 Simplified P2P Ledger via Gossip and Consensus
@@ -43,3 +51,57 @@ The Implementation: If Node_B receives a block that doesn't fit its current hash
 
 The Logic: If the sender's chain is longer (contains more blocks), Node_B deletes its local ledger.json and replaces it with the sender's version. This ensures the whole cluster eventually matches.
 
+
+
+
+
+
+
+
+WORK 
+
+PERSON A → Node Core + Storage
+Goal:
+Build a single-node working API
+
+Tasks:
+1. Project Setup
+Initialize Go module
+
+Folder structure:
+
+/cmd/node
+/internal/api
+/internal/models
+/internal/storage
+2. Define Model
+type Transaction struct {
+    ID        string `json:"id"`
+    Data      string `json:"data"`
+    Timestamp int64  `json:"timestamp"`
+}
+3. Storage Layer
+File: ledger.json
+
+Functions:
+
+LoadTransactions()
+SaveTransaction(tx Transaction)
+TransactionExists(id string)
+4. API Handlers
+Using Gin or net/http:
+
+POST /transaction
+
+Validate JSON
+
+Save transaction
+
+Return success
+
+GET /transactions
+
+Return all stored transactions
+
+Deliverable:
+→ You can POST manually and see it stored
