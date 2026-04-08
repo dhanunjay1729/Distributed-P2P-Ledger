@@ -4,14 +4,21 @@ import (
 "github.com/gin-gonic/gin"
 	"p2pledger/internal/models"
 	"p2pledger/internal/storage"
+	"p2pledger/Gossip_Engine"
 )
 
 type Handler struct {
 	Store storage.Storage
+	Gossip *gossip.GossipEngine   //note newly added  change to integrate 
+
 }
 
-func NewHandler(store storage.Storage) *Handler {
-	return &Handler{Store: store}
+//new handler functions
+func NewHandler(store storage.Storage, g *gossip.GossipEngine) *Handler {
+	return &Handler{
+		Store:  store,
+		Gossip: g,
+	}
 }
 
 // POST /transaction
@@ -42,8 +49,11 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	// after saving
+    h.Gossip.Gossip(tx) //newly added 
 
 	c.JSON(200, gin.H{"status": "saved"})
+
 }
 
 
@@ -55,6 +65,7 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 	// 1. Load from storage
 	// 2. Return JSON
 	txs, err := h.Store.LoadTransactions()
+
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -62,6 +73,46 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 
 	c.JSON(200, txs)
 }
+
+
+// route for /gossip newdly added 
+
+func (h *Handler) GossipReceive(c *gin.Context) {
+	var tx models.Transaction
+
+	if err := c.ShouldBindJSON(&tx); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	exists, _ := h.Store.TransactionExists(tx.ID)
+	if exists {
+		return
+	}
+
+	h.Store.SaveTransaction(tx)
+	go h.Gossip.Gossip(tx)
+
+	c.JSON(200, gin.H{"status": "received"})
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

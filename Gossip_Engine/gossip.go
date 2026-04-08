@@ -1,4 +1,4 @@
-package main
+package gossip
 
 import (
 	"bytes"
@@ -12,15 +12,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"p2pledger/internal/storage"
+	"p2pledger/internal/models"
+
 )
 
 // Transaction represents a piece of data to be gossiped across the network.
 // Each transaction has a unique ID, some data (e.g., "Alice pays Bob $10"), and a timestamp.
-type Transaction struct {
-	ID        string `json:"id"`
-	Data      string `json:"data"`
-	Timestamp int64  `json:"timestamp"`
-}
+
+
+// type Transaction struct {
+// 	ID        string `json:"id"`
+// 	Data      string `json:"data"`
+// 	Timestamp int64  `json:"timestamp"`
+// }
+//<--------chaged becuse alreayd defined
+
+
+
 
 // GossipEngine is the core structure that manages peer-to-peer gossip.
 // It holds the list of peers, a set of seen transaction IDs (to avoid loops),
@@ -30,10 +39,14 @@ type GossipEngine struct {
 	nodeAddr     string            // This node's own address (used only for logging)
 	seen         map[string]bool   // Tracks already processed transaction IDs
 	seenMu       sync.RWMutex      // Mutex for seen map (concurrent read/write)
-	transactions []Transaction     // All transactions this node has ever seen (for GET /Transactions)
+	transactions []models.Transaction     // All transactions this node has ever seen (for GET /Transactions)
 	txMu         sync.RWMutex      // Mutex for transactions slice
 	httpClient   *http.Client      // HTTP client with timeout
+	store storage.Storage         //<-----------------creating a storgae attribute 
 }
+
+
+
 
 // NewGossipEngine creates a new gossip engine by reading peers from a file.
 // Parameters:
@@ -42,7 +55,8 @@ type GossipEngine struct {
 // Returns:
 //   - *GossipEngine: initialised engine
 //   - error: if file reading fails
-func NewGossipEngine(peersFile, nodeAddr string) (*GossipEngine, error) {
+//<---------------need to add new attribute for storage 
+func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage) (*GossipEngine, error) {
 	// Read the entire peers file (fine for small files; for large lists use bufio.Scanner)
 	data, err := os.ReadFile(peersFile)
 	if err != nil {
@@ -64,10 +78,14 @@ func NewGossipEngine(peersFile, nodeAddr string) (*GossipEngine, error) {
 		peers:        peers,
 		nodeAddr:     nodeAddr,
 		seen:         make(map[string]bool),
-		transactions: []Transaction{},
+		store:        store,//adding the new store thingy
+		transactions: []models.Transaction{},
 		httpClient:   &http.Client{Timeout: 5 * time.Second},
 	}, nil
 }
+
+
+
 
 // selectRandomPeers picks n distinct random peers from the peer list.
 // If n >= number of peers, it returns a shuffled copy of all peers.
@@ -99,14 +117,17 @@ func (g *GossipEngine) isSeen(txID string) bool {
 	return g.seen[txID]
 }
 
+
+
 // markSeen records a transaction as seen and appends it to the local transactions list.
 // It acquires both write locks (seen and transactions) to ensure consistency.
-func (g *GossipEngine) markSeen(tx Transaction) {
+func (g *GossipEngine) markSeen(tx models.Transaction) {
 	g.seenMu.Lock()
 	defer g.seenMu.Unlock()
 	g.txMu.Lock()
 	defer g.txMu.Unlock()
 	g.seen[tx.ID] = true
+	g.store.SaveTransaction(tx)//<------------------------------newly added
 	g.transactions = append(g.transactions, tx)
 }
 
@@ -114,7 +135,7 @@ func (g *GossipEngine) markSeen(tx Transaction) {
 // It marks the transaction as seen (if new) and forwards it to 2 random peers.
 // This method is called either by the /Transaction endpoint (user‑initiated)
 // or by HandleIncoming when a transaction is received from another node.
-func (g *GossipEngine) Gossip(tx Transaction) {
+func (g *GossipEngine) Gossip(tx models.Transaction) {
 	if g.isSeen(tx.ID) {
 		log.Printf("[%s] Gossip called but tx %s already seen – ignoring", g.nodeAddr, tx.ID)
 		return
@@ -131,7 +152,7 @@ func (g *GossipEngine) Gossip(tx Transaction) {
 
 // sendGossip performs the actual HTTP POST request to a single peer.
 // It is called asynchronously by Gossip.
-func (g *GossipEngine) sendGossip(peerURL string, tx Transaction) {
+func (g *GossipEngine) sendGossip(peerURL string, tx models.Transaction) {
 	jsonData, err := json.Marshal(tx)
 	if err != nil {
 		log.Printf("[%s] Failed to marshal tx: %v", g.nodeAddr, err)
@@ -151,7 +172,7 @@ func (g *GossipEngine) sendGossip(peerURL string, tx Transaction) {
 // HandleIncoming processes a transaction received via the /gossip endpoint.
 // If the transaction is new, it marks it as seen and then forwards it further (gossip).
 // This implements the "if exists → ignore; else → forward" rule.
-func (g *GossipEngine) HandleIncoming(tx Transaction) {
+func (g *GossipEngine) HandleIncoming(tx models.Transaction) {
 	if g.isSeen(tx.ID) {
 		log.Printf("[%s] Ignoring duplicate tx %s", g.nodeAddr, tx.ID)
 		return
@@ -163,8 +184,22 @@ func (g *GossipEngine) HandleIncoming(tx Transaction) {
 	go g.Gossip(tx)
 }
 
+
+
+
+
+
+
+
+
+// i am skippinig these for now ;like manking changes in mine 
+
+
 // gossipHandler is the HTTP handler for POST /gossip.
 // It reads the transaction JSON, then calls HandleIncoming in a goroutine.
+
+
+
 func (g *GossipEngine) gossipHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
@@ -175,7 +210,7 @@ func (g *GossipEngine) gossipHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	var tx Transaction
+	var tx models.Transaction
 	if err := json.Unmarshal(body, &tx); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -183,6 +218,14 @@ func (g *GossipEngine) gossipHandler(w http.ResponseWriter, r *http.Request) {
 	go g.HandleIncoming(tx)
 	w.WriteHeader(http.StatusOK)
 }
+
+
+
+//commetsn by me: call bakc function for gossip how to move this to /internals/api?
+ 
+
+
+
 
 // getTransactionsHandler is the HTTP handler for GET /Transactions.
 // It returns all transactions this node has seen as a JSON array.
@@ -197,6 +240,20 @@ func (g *GossipEngine) getTransactionsHandler(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(g.transactions)
 }
 
+//coomments by sai:conciflcts wwiht mt /transaction ,should i edit in /internals/api?
+
+
+
+
+
+
+
+
+
+
+
+
+
 // startServer registers the HTTP handlers and starts listening.
 func (g *GossipEngine) startServer(port string) {
 	http.HandleFunc("/gossip", g.gossipHandler)
@@ -208,56 +265,56 @@ func (g *GossipEngine) startServer(port string) {
 	}
 }
 
-func main() {
-	// Command-line arguments: node-address, port, [peers-file]
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run main.go <node-address> <port> [peers-file]")
-		fmt.Println("Example: go run main.go http://localhost:8001 8001 peers.txt")
-		os.Exit(1)
-	}
-	nodeAddr := os.Args[1]
-	port := os.Args[2]
-	peersFile := "peers.txt"
-	if len(os.Args) >= 4 {
-		peersFile = os.Args[3]
-	}
+// func main() {
+// 	// Command-line arguments: node-address, port, [peers-file]
+// 	if len(os.Args) < 3 {
+// 		fmt.Println("Usage: go run main.go <node-address> <port> [peers-file]")
+// 		fmt.Println("Example: go run main.go http://localhost:8001 8001 peers.txt")
+// 		os.Exit(1)
+// 	}
+// 	nodeAddr := os.Args[1]
+// 	port := os.Args[2]
+// 	peersFile := "peers.txt"
+// 	if len(os.Args) >= 4 {
+// 		peersFile = os.Args[3]
+// 	}
 
-	rand.Seed(time.Now().UnixNano()) // Seed random number generator
+// 	rand.Seed(time.Now().UnixNano()) // Seed random number generator
 
-	engine, err := NewGossipEngine(peersFile, nodeAddr)
-	if err != nil {
-		log.Fatalf("Failed to create gossip engine: %v", err)
-	}
+// 	engine, err := NewGossipEngine(peersFile, nodeAddr)
+// 	if err != nil {
+// 		log.Fatalf("Failed to create gossip engine: %v", err)
+// 	}
 
-	// Start the gossip HTTP server in a background goroutine
-	go engine.startServer(port)
+// 	// Start the gossip HTTP server in a background goroutine
+// 	go engine.startServer(port)
 
-	// POST /Transaction endpoint – allows users to submit a new transaction
-	http.HandleFunc("/Transaction", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			Data string `json:"data"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		tx := Transaction{
-			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-			Data:      req.Data,
-			Timestamp: time.Now().Unix(),
-		}
-		engine.Gossip(tx) // start the gossip chain
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprintf(w, "Transaction gossiped with ID %s\n", tx.ID)
-	})
+// 	// POST /Transaction endpoint – allows users to submit a new transaction
+// 	http.HandleFunc("/Transaction", func(w http.ResponseWriter, r *http.Request) {
+// 		if r.Method != http.MethodPost {
+// 			http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+// 			return
+// 		}
+// 		var req struct {
+// 			Data string `json:"data"`
+// 		}
+// 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+// 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+// 			return
+// 		}
+// 		tx := Transaction{
+// 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+// 			Data:      req.Data,
+// 			Timestamp: time.Now().Unix(),
+// 		}
+// 		engine.Gossip(tx) // start the gossip chain
+// 		w.WriteHeader(http.StatusAccepted)
+// 		fmt.Fprintf(w, "Transaction gossiped with ID %s\n", tx.ID)
+// 	})
 
-	log.Printf("[%s] Ready. Endpoints: POST /Transaction, POST /gossip, GET /Transactions", nodeAddr)
+// 	log.Printf("[%s] Ready. Endpoints: POST /Transaction, POST /gossip, GET /Transactions", nodeAddr)
 
-	// Block forever (keep the main goroutine alive)
-	select {}
-}
+// 	// Block forever (keep the main goroutine alive)
+// 	select {}
+// }
 
