@@ -21,7 +21,7 @@ func main() {
 
 	router := gin.Default()
     // init storage
-	store := storage.NewFileStorage("ledger_" + port + ".json")
+	store := storage.NewFileStorage("Node -A/ledger_" + port + ".json")
     //neew addition 
 	gossipEngine,err := gossip.NewGossipEngine(peersFile, nodeAddr, store)// i need ot give peer directory by defininngalert!!! define 
     fmt.Println(err)
