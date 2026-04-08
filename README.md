@@ -1,3 +1,16 @@
+### To run three peers use the following command 
+
+```bash
+make run
+```
+
+### Test through CURL
+```bash
+curl -X POST localhost:8001/transaction -H "Content-Type: application/json" -d '{"id":"tx3","data":"test","timestamp":123}'
+```
+
+
+
 ### Running API Tests
 
 To run all tests for the project, use the following command in your terminal:
