@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  node1:
+    build: .
+    container_name: node1
+    ports:
+      - "8001:8000"
+    environment:
+      - NODE_ID=node1
+      - PORT=8000
+      - PEERS=http://node2:8000,http://node3:8000
+    networks:
+      - gossip-net
+  node2:
+    build: .
+    container_name: node2
+    ports:
+      - "8002:8000"
+    environment:
+      - NODE_ID=node2
+      - PORT=8000
+      - PEERS=http://node1:8000,http://node3:8000
+    networks:
+      - gossip-net
+  node3:
+    build: .      
+    container_name: node3
+    ports:
+      - "8003:8000"
+    environment:
+      - NODE_ID=node3
+      - PORT=8000
+      - PEERS=http://node1:8000,http://node2:8000
+    networks:
+      - gossip-net
+
+networks:
+  gossip-net:
+    driver: bridge
