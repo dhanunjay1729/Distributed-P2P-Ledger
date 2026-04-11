@@ -1,3 +1,11 @@
+/*
+This file contains tests for the API handlers of the P2P ledger application. 
+It sets up a test router using Gin, 
+and defines two test functions: TestAddTransactionAPI and TestGetTransactionsAPI.
+The first test checks if a POST request to add a transaction returns a 200 status code, 
+while the second test checks if a GET request to retrieve transactions also
+returns a 200 status code. The tests use the httptest package to create HTTP requests and record responses.
+*/
 package api
 
 import (

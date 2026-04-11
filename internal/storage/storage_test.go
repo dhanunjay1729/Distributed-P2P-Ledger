@@ -1,3 +1,17 @@
+/*
+ Test cases for the file-based storage implementation.
+ This test file includes tests for saving and loading transactions, 
+ as well as checking for transaction existence.
+ what does it mean?
+ This means that the test cases in this file are designed to verify the 
+ functionality of the file-based storage system for transactions.
+ The tests will ensure that transactions can be saved to a file,
+ loaded back correctly, and that the system can check if a transaction with a 
+ specific ID exists in the storage. These tests help confirm that the file
+ storage implementation is working as intended and can reliably manage 
+ transaction data on disk.
+*/
+
 package storage
 
 import (

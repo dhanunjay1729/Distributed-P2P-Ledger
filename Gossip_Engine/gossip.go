@@ -1,3 +1,14 @@
+/* this file contains the gossip engine implementation 
+The GossipEngine struct manages the list of peers, seen transactions, and the local transaction store.
+It provides methods to select random peers, check if a transaction has been seen, mark transactions as seen,
+and handle incoming gossip.
+The main method is Gossip, which takes a transaction, checks if it's new, marks it as seen, and forwards it to 
+2 random peers.
+The sendGossip method performs the actual HTTP POST to a peer, and HandleIncoming processes received transactions.
+The gossipHandler is the HTTP handler for incoming gossip, and getTransactionsHandler returns all seen transactions.
+The startServer method registers the handlers and starts the HTTP server.
+*/
+
 package gossip
 
 import (
