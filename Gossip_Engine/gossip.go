@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -23,10 +22,29 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"p2pledger/internal/storage"
-	"p2pledger/internal/models"
 
+	"p2pledger/internal/models"
+	"p2pledger/internal/storage"
 )
+
+const (
+	defaultFanout       = 2
+	maxSendRetries      = 3
+	initialRetryBackoff = 200 * time.Millisecond
+)
+
+// GossipEngine is the core structure that manages peer-to-peer gossip.
+// It holds the list of peers, a set of seen transaction IDs (to avoid loops),
+// a local store of all transactions, and an HTTP client for outgoing requests.
+type GossipEngine struct {
+	peers      []string
+	nodeAddr   string
+	seen       map[string]bool
+	seenMu     sync.RWMutex
+	httpClient *http.Client
+	store      storage.Storage
+	fanout     int
+}
 
 // Transaction represents a piece of data to be gossiped across the network.
 // Each transaction has a unique ID, some data (e.g., "Alice pays Bob $10"), and a timestamp.
@@ -38,26 +56,6 @@ import (
 // 	Timestamp int64  `json:"timestamp"`
 // }
 //<--------chaged becuse alreayd defined
-
-
-
-
-// GossipEngine is the core structure that manages peer-to-peer gossip.
-// It holds the list of peers, a set of seen transaction IDs (to avoid loops),
-// a local store of all transactions, and an HTTP client for outgoing requests.
-type GossipEngine struct {
-	peers        []string          // List of peer URLs (e.g., "http://localhost:8002")
-	nodeAddr     string            // This node's own address (used only for logging)
-	seen         map[string]bool   // Tracks already processed transaction IDs
-	seenMu       sync.RWMutex      // Mutex for seen map (concurrent read/write)
-	transactions []models.Transaction     // All transactions this node has ever seen (for GET /Transactions)
-	txMu         sync.RWMutex      // Mutex for transactions slice
-	httpClient   *http.Client      // HTTP client with timeout
-	store storage.Storage         //<-----------------creating a storgae attribute 
-}
-
-
-
 
 // NewGossipEngine creates a new gossip engine by reading peers from a file.
 // Parameters:
@@ -74,29 +72,35 @@ func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage) (*Gossip
 		return nil, fmt.Errorf("failed to read peers file: %w", err)
 	}
 
+	// Seed the random number generator to ensure different random sequences each run.
+	rand.Seed(time.Now().UnixNano())
+
 	// Split file content into lines and trim whitespace
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	peers := make([]string, 0, len(lines))
+	seenPeers := make(map[string]struct{}, len(lines))
+
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		peer := strings.TrimSpace(line)
+		if peer == "" || peer == nodeAddr {
 			continue
 		}
-		peers = append(peers, line)
+		if _, ok := seenPeers[peer]; ok {
+			continue
+		}
+		seenPeers[peer] = struct{}{}
+		peers = append(peers, peer)
 	}
 
 	return &GossipEngine{
-		peers:        peers,
-		nodeAddr:     nodeAddr,
-		seen:         make(map[string]bool),
-		store:        store,//adding the new store thingy
-		transactions: []models.Transaction{},
-		httpClient:   &http.Client{Timeout: 5 * time.Second},
+		peers:      peers,
+		nodeAddr:   nodeAddr,
+		seen:       make(map[string]bool),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		store:      store,
+		fanout:     defaultFanout,
 	}, nil
 }
-
-
-
 
 // selectRandomPeers picks n distinct random peers from the peer list.
 // If n >= number of peers, it returns a shuffled copy of all peers.
@@ -128,18 +132,43 @@ func (g *GossipEngine) isSeen(txID string) bool {
 	return g.seen[txID]
 }
 
+// NOTE:
+// Removed legacy markSeen() that referenced g.txMu / g.transactions.
+// Dedup + persistence is now handled by acceptTransaction() using:
+// 1) in-memory seen map
+// 2) persistent store.TransactionExists + store.SaveTransaction
 
-
-// markSeen records a transaction as seen and appends it to the local transactions list.
-// It acquires both write locks (seen and transactions) to ensure consistency.
-func (g *GossipEngine) markSeen(tx models.Transaction) {
+// acceptTransaction checks if a transaction is new and accepts it if so.
+// It returns true if the transaction was accepted, false if it was already known,
+// and an error if there was a problem during the process.
+func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 	g.seenMu.Lock()
-	defer g.seenMu.Unlock()
-	g.txMu.Lock()
-	defer g.txMu.Unlock()
+	if g.seen[tx.ID] {
+		g.seenMu.Unlock()
+		return false, nil
+	}
 	g.seen[tx.ID] = true
-	g.store.SaveTransaction(tx)//<------------------------------newly added
-	g.transactions = append(g.transactions, tx)
+	g.seenMu.Unlock()
+
+	exists, err := g.store.TransactionExists(tx.ID)
+	if err != nil {
+		g.seenMu.Lock()
+		delete(g.seen, tx.ID)
+		g.seenMu.Unlock()
+		return false, fmt.Errorf("exists check failed: %w", err)
+	}
+	if exists {
+		return false, nil
+	}
+
+	if err := g.store.SaveTransaction(tx); err != nil {
+		g.seenMu.Lock()
+		delete(g.seen, tx.ID)
+		g.seenMu.Unlock()
+		return false, fmt.Errorf("save failed: %w", err)
+	}
+
+	return true, nil
 }
 
 // Gossip is the main method that starts the gossip propagation.
@@ -147,16 +176,19 @@ func (g *GossipEngine) markSeen(tx models.Transaction) {
 // This method is called either by the /Transaction endpoint (user‑initiated)
 // or by HandleIncoming when a transaction is received from another node.
 func (g *GossipEngine) Gossip(tx models.Transaction) {
-	if g.isSeen(tx.ID) {
-		log.Printf("[%s] Gossip called but tx %s already seen – ignoring", g.nodeAddr, tx.ID)
+	accepted, err := g.acceptTransaction(tx)
+	if err != nil {
+		log.Printf("[%s] tx %s rejected due to error: %v", g.nodeAddr, tx.ID, err)
 		return
 	}
-	g.markSeen(tx)
+	if !accepted {
+		log.Printf("[%s] tx %s already known; skipping", g.nodeAddr, tx.ID)
+		return
+	}
+
 	log.Printf("[%s] Gossiping tx %s: %s", g.nodeAddr, tx.ID, tx.Data)
 
-	peersToSend := g.selectRandomPeers(2)
-	for _, peerURL := range peersToSend {
-		// Launch a goroutine for each peer to avoid blocking
+	for _, peerURL := range g.selectRandomPeers(g.fanout) {
 		go g.sendGossip(peerURL, tx)
 	}
 }
@@ -166,166 +198,130 @@ func (g *GossipEngine) Gossip(tx models.Transaction) {
 func (g *GossipEngine) sendGossip(peerURL string, tx models.Transaction) {
 	jsonData, err := json.Marshal(tx)
 	if err != nil {
-		log.Printf("[%s] Failed to marshal tx: %v", g.nodeAddr, err)
+		log.Printf("[%s] Failed to marshal tx %s: %v", g.nodeAddr, tx.ID, err)
 		return
 	}
-	resp, err := g.httpClient.Post(peerURL+"/gossip", "application/json", bytes.NewReader(jsonData))
-	if err != nil {
-		log.Printf("[%s] Failed to send gossip to %s: %v", g.nodeAddr, peerURL, err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[%s] Peer %s returned status %d", g.nodeAddr, peerURL, resp.StatusCode)
+
+	backoff := initialRetryBackoff
+	for attempt := 1; attempt <= maxSendRetries; attempt++ {
+		resp, err := g.httpClient.Post(peerURL+"/gossip", "application/json", bytes.NewReader(jsonData))
+		if err == nil {
+			status := resp.StatusCode
+			resp.Body.Close()
+			if status == http.StatusOK {
+				return
+			}
+			err = fmt.Errorf("status %d", status)
+		}
+
+		if attempt == maxSendRetries {
+			log.Printf("[%s] Failed to send tx %s to %s after %d attempts: %v", g.nodeAddr, tx.ID, peerURL, attempt, err)
+			return
+		}
+
+		log.Printf("[%s] Retry %d/%d for tx %s to %s: %v", g.nodeAddr, attempt, maxSendRetries, tx.ID, peerURL, err)
+		time.Sleep(backoff)
+		backoff *= 2
 	}
 }
 
-// HandleIncoming processes a transaction received via the /gossip endpoint.
-// If the transaction is new, it marks it as seen and then forwards it further (gossip).
-// This implements the "if exists → ignore; else → forward" rule.
+// HandleIncoming processes a transaction received via /gossip.
 func (g *GossipEngine) HandleIncoming(tx models.Transaction) {
-	if g.isSeen(tx.ID) {
-		log.Printf("[%s] Ignoring duplicate tx %s", g.nodeAddr, tx.ID)
-		return
-	}
-	g.markSeen(tx)
-	log.Printf("[%s] Received new tx %s: %s (timestamp %d)", g.nodeAddr, tx.ID, tx.Data, tx.Timestamp)
-
-	// Forward to other peers asynchronously
-	go g.Gossip(tx)
+	// Single path for local+incoming: accept + persist + forward if new.
+	g.Gossip(tx)
 }
 
+// NOTE:
+// Removed legacy net/http handlers from this package:
+// - gossipHandlerGreat — here is the final summary of what was changed in gossip.go, in simple words.
 
+## ✅ 1) Unified transaction handling (local + incoming)
+**What changed:**
+- `HandleIncoming(tx)` now directly calls `Gossip(tx)`.
+- Both user-created transactions and `/gossip`-received transactions go through the **same path**.
 
+**Why:**
+- This prevents inconsistent behavior.
+- If a transaction is new, it is accepted, saved, and forwarded.
+- If already known, it is skipped cleanly.
 
+---
 
+## ✅ 2) Dedup logic finalized (memory + persistent storage)
+**What changed:**
+- Added/used `acceptTransaction(tx)` as the single dedup + save gate.
+- It checks:
+  1. **In-memory `seen` map** (fast duplicate detection in current runtime)
+  2. **Persistent store check** (`TransactionExists`) for restart safety
+  3. Saves transaction with `SaveTransaction` only if truly new.
 
+**Why:**
+- Memory check is fast.
+- DB check ensures duplicates are still avoided even after node restart.
+- This gives reliable, production-style dedup behavior.
 
+---
 
+## ✅ 3) Removed old legacy state references
+**What changed:**
+- Old logic based on `txMu` and `transactions` was removed/disabled.
+- `GossipEngine` now uses:
+  - `seen` + `seenMu`
+  - `store storage.Storage`
 
-// i am skippinig these for now ;like manking changes in mine 
+**Why:**
+- `txMu`/`transactions` no longer exist in the struct.
+- Keeping old references caused compile errors.
+- New structure is cleaner and matches current architecture.
 
+---
 
-// gossipHandler is the HTTP handler for POST /gossip.
-// It reads the transaction JSON, then calls HandleIncoming in a goroutine.
+## ✅ 4) Removed/disabled legacy HTTP server path in gossip package
+**What changed:**
+- Legacy net/http handlers in `gossip` package were removed/marked out:
+  - `gossipHandler`
+  - `getTransactionsHandler`
+  - `startServer`
 
+**Why:**
+- Runtime HTTP routing is now handled by **Gin** in api.
+- Avoids two competing server paths and duplicate logic.
 
+---
 
-func (g *GossipEngine) gossipHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusBadRequest)
-		return
-	}
-	var tx models.Transaction
-	if err := json.Unmarshal(body, &tx); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-	go g.HandleIncoming(tx)
-	w.WriteHeader(http.StatusOK)
-}
+## ✅ 5) Fanout behavior confirmed
+**What changed:**
+- Kept `defaultFanout = 2`.
+- `selectRandomPeers(n)` chooses unique random peers.
+- If `n >= len(peers)`, it returns all peers shuffled.
 
+**Why:**
+- Ensures gossip spreads to 2 peers by default.
+- Avoids sending twice to same peer in one round.
 
+---
 
-//commetsn by me: call bakc function for gossip how to move this to /internals/api?
- 
+## ✅ 6) Retry + backoff + logging confirmed
+**What changed:**
+- `sendGossip` retries up to `maxSendRetries = 3`.
+- Uses exponential backoff starting at `200ms`.
+- Logs retry attempts and final failure clearly.
 
+**Why:**
+- Handles transient network failures.
+- Makes debugging propagation issues easier.
 
+---
 
-
-// getTransactionsHandler is the HTTP handler for GET /Transactions.
-// It returns all transactions this node has seen as a JSON array.
-func (g *GossipEngine) getTransactionsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	g.txMu.RLock()
-	defer g.txMu.RUnlock()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(g.transactions)
-}
-
-//coomments by sai:conciflcts wwiht mt /transaction ,should i edit in /internals/api?
-
-
-
-
-
-
-
-
-
-
-
-
-
-// startServer registers the HTTP handlers and starts listening.
-func (g *GossipEngine) startServer(port string) {
-	http.HandleFunc("/gossip", g.gossipHandler)
-	http.HandleFunc("/Transactions", g.getTransactionsHandler)
-	addr := ":" + port
-	log.Printf("[%s] Gossip engine listening on %s", g.nodeAddr, addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatalf("[%s] Server failed: %v", g.nodeAddr, err)
-	}
-}
-
-// func main() {
-// 	// Command-line arguments: node-address, port, [peers-file]
-// 	if len(os.Args) < 3 {
-// 		fmt.Println("Usage: go run main.go <node-address> <port> [peers-file]")
-// 		fmt.Println("Example: go run main.go http://localhost:8001 8001 peers.txt")
-// 		os.Exit(1)
-// 	}
-// 	nodeAddr := os.Args[1]
-// 	port := os.Args[2]
-// 	peersFile := "peers.txt"
-// 	if len(os.Args) >= 4 {
-// 		peersFile = os.Args[3]
-// 	}
-
-// 	rand.Seed(time.Now().UnixNano()) // Seed random number generator
-
-// 	engine, err := NewGossipEngine(peersFile, nodeAddr)
-// 	if err != nil {
-// 		log.Fatalf("Failed to create gossip engine: %v", err)
-// 	}
-
-// 	// Start the gossip HTTP server in a background goroutine
-// 	go engine.startServer(port)
-
-// 	// POST /Transaction endpoint – allows users to submit a new transaction
-// 	http.HandleFunc("/Transaction", func(w http.ResponseWriter, r *http.Request) {
-// 		if r.Method != http.MethodPost {
-// 			http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-// 			return
-// 		}
-// 		var req struct {
-// 			Data string `json:"data"`
-// 		}
-// 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-// 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-// 			return
-// 		}
-// 		tx := Transaction{
-// 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-// 			Data:      req.Data,
-// 			Timestamp: time.Now().Unix(),
-// 		}
-// 		engine.Gossip(tx) // start the gossip chain
-// 		w.WriteHeader(http.StatusAccepted)
-// 		fmt.Fprintf(w, "Transaction gossiped with ID %s\n", tx.ID)
-// 	})
-
-// 	log.Printf("[%s] Ready. Endpoints: POST /Transaction, POST /gossip, GET /Transactions", nodeAddr)
-
-// 	// Block forever (keep the main goroutine alive)
-// 	select {}
-// }
+## ✅ Net result
+You now have a gossip engine that is:
+- **Consistent** (single handling path),
+- **Deduplicated correctly** (memory + DB),
+- **Architecture-aligned** (Gin-only runtime path),
+- **Resilient** (retry/backoff),
+- **Cleaner** (legacy code removed).
+// - getTransactionsHandler
+// - startServer
+//
+// Runtime HTTP routing should stay in internal/api (Gin path).
 
