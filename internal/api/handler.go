@@ -1,10 +1,27 @@
+/*
+This file contains the API handlers for the P2P ledger application. 
+API handler is a function that processes incoming HTTP requests,
+interacts with the storage layer to manage transactions, and returns appropriate responses.
+It defines a Handler struct that has a reference to the storage layer and 
+the gossip engine. 
+The Handler struct has methods to handle incoming HTTP requests
+for adding transactions, getting transactions, and receiving gossip messages. 
+The AddTransaction method processes incoming transaction data, checks if it 
+already exists, saves it to storage, and then gossips it to peers. 
+The GetTransactions method retrieves all transactions from storage and 
+returns them as JSON. 
+The GossipReceive method handles incoming gossip messages, checks if the
+transaction is new, saves it, and gossips it further if necessary.
+
+*/
 package api
 
 import (
-"github.com/gin-gonic/gin"
-	"p2pledger/internal/models"
+	"net/http" 
+	"github.com/gin-gonic/gin" // for HTTP routing and handling
+	gossip "p2pledger/Gossip_Engine"
+	"p2pledger/internal/models" 
 	"p2pledger/internal/storage"
-	"p2pledger/Gossip_Engine"
 )
 
 type Handler struct {
@@ -13,12 +30,24 @@ type Handler struct {
 
 }
 
-//new handler functions
-func NewHandler(store storage.Storage, g *gossip.GossipEngine) *Handler {
+// Backward-compatible: NewHandler(store) OR NewHandler(store, gossipEngine)
+func NewHandler(store storage.Storage, g ...*gossip.GossipEngine) *Handler {
+	var ge *gossip.GossipEngine
+	if len(g) > 0 {
+		ge = g[0]
+	}
 	return &Handler{
 		Store:  store,
-		Gossip: g,
+		Gossip: ge,
 	}
+}
+
+// isValidTransaction checks if the transaction has all required fields (ID, Data, Timestamp) and that they are valid (non-empty ID and Data, positive Timestamp).
+func isValidTransaction(tx models.Transaction) bool {
+	if tx.ID == "" || tx.Data == "" || tx.Timestamp <= 0 {
+		return false
+	}
+	return true
 }
 
 // POST /transaction
@@ -30,33 +59,39 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 	// 3. Save
 	// 4. Return response
 	if err := c.ShouldBindJSON(&tx); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !isValidTransaction(tx) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id, data, timestamp are required"})
 		return
 	}
 
 	exists, err := h.Store.TransactionExists(tx.ID)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	if exists {
-		c.JSON(400, gin.H{"error": "already exists"})
+		c.JSON(http.StatusConflict, gin.H{"error": "already exists"})
 		return
 	}
 
+	// If gossip engine is wired, use gossip path.
+	if h.Gossip != nil {
+		h.Gossip.Gossip(tx)
+		c.JSON(http.StatusAccepted, gin.H{"status": "gossip_started"})
+		return
+	}
+
+	// Fallback for tests/single-node mode.
 	if err := h.Store.SaveTransaction(tx); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// after saving
-    h.Gossip.Gossip(tx) //newly added 
-
-	c.JSON(200, gin.H{"status": "saved"})
-
+	c.JSON(http.StatusCreated, gin.H{"status": "saved_locally"})
 }
-
-
 
 // GET /transactions
 
@@ -67,11 +102,10 @@ func (h *Handler) GetTransactions(c *gin.Context) {
 	txs, err := h.Store.LoadTransactions()
 
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	c.JSON(200, txs)
+	c.JSON(http.StatusOK, txs)
 }
 
 
@@ -81,40 +115,22 @@ func (h *Handler) GossipReceive(c *gin.Context) {
 	var tx models.Transaction
 
 	if err := c.ShouldBindJSON(&tx); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !isValidTransaction(tx) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id, data, timestamp are required"})
 		return
 	}
 
-	exists, _ := h.Store.TransactionExists(tx.ID)
-	if exists {
+	if h.Gossip == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "gossip engine not configured"})
 		return
 	}
 
-	h.Store.SaveTransaction(tx)
-	go h.Gossip.Gossip(tx)
-
-	c.JSON(200, gin.H{"status": "received"})
+	h.Gossip.HandleIncoming(tx)
+	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // POST /sync (optional for now)
 func (h *Handler) SyncTransactions(c *gin.Context) {

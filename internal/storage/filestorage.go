@@ -1,3 +1,16 @@
+/*
+ File-based storage implementation for transactions.
+ This implementation reads and writes transactions to a JSON file on disk.
+ The FileStorage struct has a FilePath field that specifies the location of the 
+ JSON file.
+ The LoadTransactions method reads the file, unmarshals the JSON into a slice of
+ Transaction structs, and returns it. If the file does not exist, it returns an empty slice.
+ The SaveTransaction method loads existing transactions, appends the new transaction, 
+ marshals the slice back to JSON, and writes it to the file.
+ The TransactionExists method checks if a transaction with a given ID exists in the loaded transactions.
+ 
+*/
+
 package storage
 
 import ("p2pledger/internal/models"

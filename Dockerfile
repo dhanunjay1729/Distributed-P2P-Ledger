@@ -1,29 +1,20 @@
 # ---------- BUILD STAGE ----------
-FROM golang:1.22.12-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
-
-# Copy go modules first (for caching)
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy full project
 COPY . .
-
-# Build binary
-RUN go build -o node ./cmd/node
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/node ./node_a
 
 
 # ---------- RUN STAGE ----------
-FROM alpine:latest
+FROM alpine:3.20
+WORKDIR /app
 
-WORKDIR /root/
+COPY --from=builder /bin/node /app/node
 
-# Copy built binary
-COPY --from=builder /app/node .
-
-# Expose internal port
-EXPOSE 8000
-
-# Run binary
-CMD ["./node"]
+EXPOSE 8080
+ENTRYPOINT ["/app/node"]

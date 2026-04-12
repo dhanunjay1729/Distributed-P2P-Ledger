@@ -1,40 +1,92 @@
-version: "3.8"
-
 services:
   node1:
     build: .
     container_name: node1
-    ports:
-      - "8001:8000"
     environment:
-      - NODE_ID=node1
-      - PORT=8000
-      - PEERS=http://node2:8000,http://node3:8000
-    networks:
-      - gossip-net
+      PORT: "8080"
+      NODE_ADDR: "http://node1:8080" # The NODE_ADDR environment variable is set to "http://node1:8080" for node1, which allows the node to identify itself and communicate with other nodes in the network. This address is used by the gossip protocol to send and receive transactions between nodes. By setting NODE_ADDR to the container's own address, it ensures that the node can correctly identify itself when participating in the peer-to-peer communication and gossiping transactions with its peers.
+      PEERS_FILE: "/app/config/peers/node1.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro # The volume mapping for the peers configuration is set to read-only (ro) to ensure that the container cannot modify the peer configuration files. This is important for maintaining the integrity of the peer list, as it prevents accidental or malicious changes to the configuration from within the container. By mapping the local directory containing the peer configuration files to a directory inside the container with read-only permissions, we ensure that the node can access the necessary peer information while safeguarding against unintended modifications.
+      - node1_data:/app/data # The volume mapping for the ledger data is set to read-write (rw) to allow the container to persist changes to the ledger. This is essential for the functionality of the node, as it needs to be able to write new transactions to the ledger file as they are processed. By mapping a named volume (node1_data) to the /app/data directory inside the container, we ensure that any changes made to the ledger.json file are saved and can be accessed even if the container is restarted or recreated. This allows for data persistence across container lifecycles, which is crucial for maintaining the state of the ledger in a distributed system.
+
   node2:
     build: .
     container_name: node2
-    ports:
-      - "8002:8000"
     environment:
-      - NODE_ID=node2
-      - PORT=8000
-      - PEERS=http://node1:8000,http://node3:8000
-    networks:
-      - gossip-net
-  node3:
-    build: .      
-    container_name: node3
+      PORT: "8080"
+      NODE_ADDR: "http://node2:8080"
+      PEERS_FILE: "/app/config/peers/node2.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
     ports:
-      - "8003:8000"
-    environment:
-      - NODE_ID=node3
-      - PORT=8000
-      - PEERS=http://node1:8000,http://node2:8000
-    networks:
-      - gossip-net
+      - "8082:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node2_data:/app/data
 
-networks:
-  gossip-net:
-    driver: bridge
+  node3:
+    build: .
+    container_name: node3
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node3:8080"
+      PEERS_FILE: "/app/config/peers/node3.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node3_data:/app/data
+
+  node4:
+    build: .
+    container_name: node4
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node4:8080"
+      PEERS_FILE: "/app/config/peers/node4.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8084:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node4_data:/app/data
+
+  node5:
+    build: .
+    container_name: node5
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node5:8080"
+      PEERS_FILE: "/app/config/peers/node5.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node5_data:/app/data
+
+  node6:
+    build: .
+    container_name: node6
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node6:8080"
+      PEERS_FILE: "/app/config/peers/node6.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8086:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node6_data:/app/data
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+  node4_data:
+  node5_data:
+  node6_data:

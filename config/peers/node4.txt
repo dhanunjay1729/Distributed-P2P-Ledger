@@ -1,0 +1,5 @@
+http://node1:8080
+http://node2:8080
+http://node3:8080
+http://node5:8080
+http://node6:8080
