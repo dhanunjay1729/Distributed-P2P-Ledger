@@ -1,40 +1,92 @@
-version: "3.8"
-
 services:
   node1:
     build: .
     container_name: node1
-    ports:
-      - "8001:8000"
     environment:
-      - NODE_ID=node1
-      - PORT=8000
-      - PEERS=http://node2:8000,http://node3:8000
-    networks:
-      - gossip-net
+      PORT: "8080"
+      NODE_ADDR: "http://node1:8080"
+      PEERS_FILE: "/app/config/peers/node1.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node1_data:/app/data
+
   node2:
     build: .
     container_name: node2
-    ports:
-      - "8002:8000"
     environment:
-      - NODE_ID=node2
-      - PORT=8000
-      - PEERS=http://node1:8000,http://node3:8000
-    networks:
-      - gossip-net
-  node3:
-    build: .      
-    container_name: node3
+      PORT: "8080"
+      NODE_ADDR: "http://node2:8080"
+      PEERS_FILE: "/app/config/peers/node2.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
     ports:
-      - "8003:8000"
-    environment:
-      - NODE_ID=node3
-      - PORT=8000
-      - PEERS=http://node1:8000,http://node2:8000
-    networks:
-      - gossip-net
+      - "8082:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node2_data:/app/data
 
-networks:
-  gossip-net:
-    driver: bridge
+  node3:
+    build: .
+    container_name: node3
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node3:8080"
+      PEERS_FILE: "/app/config/peers/node3.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node3_data:/app/data
+
+  node4:
+    build: .
+    container_name: node4
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node4:8080"
+      PEERS_FILE: "/app/config/peers/node4.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8084:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node4_data:/app/data
+
+  node5:
+    build: .
+    container_name: node5
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node5:8080"
+      PEERS_FILE: "/app/config/peers/node5.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node5_data:/app/data
+
+  node6:
+    build: .
+    container_name: node6
+    environment:
+      PORT: "8080"
+      NODE_ADDR: "http://node6:8080"
+      PEERS_FILE: "/app/config/peers/node6.txt"
+      LEDGER_FILE: "/app/data/ledger.json"
+    ports:
+      - "8086:8080"
+    volumes:
+      - ./config/peers:/app/config/peers:ro
+      - node6_data:/app/data
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+  node4_data:
+  node5_data:
+  node6_data:

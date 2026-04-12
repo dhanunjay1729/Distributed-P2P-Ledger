@@ -39,42 +39,50 @@ why is it post?
 package main
 
 import (
-	"github.com/gin-gonic/gin"
-    "os"
+	"fmt"
+	"os"
+
+	gossip "p2pledger/Gossip_Engine"
 	"p2pledger/internal/api"
 	"p2pledger/internal/storage"
-	gossip "p2pledger/Gossip_Engine"
+
+	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	if len(os.Args) < 3 {
-		panic("Usage: go run main.go <port> <peers_file>")
+func getArgOrEnv(argIndex int, envKey string, fallback string) string {
+	if len(os.Args) > argIndex && os.Args[argIndex] != "" {
+		return os.Args[argIndex]
 	}
+	if v := os.Getenv(envKey); v != "" {
+		return v
+	}
+	return fallback
+}
 
-	port := os.Args[1]
-	peersFile := os.Args[2]
-
-	nodeAddr := "http://localhost:" + port
+func main() {
+	// Priority: CLI args > ENV > fallback
+	port := getArgOrEnv(1, "PORT", "8080")
+	peersFile := getArgOrEnv(2, "PEERS_FILE", "peers.txt")
+	nodeAddr := getArgOrEnv(3, "NODE_ADDR", "http://localhost:"+port)
+	ledgerFile := getArgOrEnv(4, "LEDGER_FILE", "node_a/ledger_"+port+".json")
 
 	router := gin.Default()
-    // init storage: each node has its own ledger file based on its port number
-	store := storage.NewFileStorage("node_a/ledger_" + port + ".json")
-    //new addition: initialize the gossip engine with the peers file, node address, and storage reference
-	gossipEngine,err := gossip.NewGossipEngine(peersFile, nodeAddr, store)
+
+	store := storage.NewFileStorage(ledgerFile)
+
+	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store)
 	if err != nil {
-		// If there's an error initializing the gossip engine, we panic and print the error message. 
-		// This ensures that the node won't start if it can't properly set up the gossip engine, which is crucial
-		//  for its operation in the P2P network.
-		panic("Failed to initialize gossip engine: " + err.Error())
+		panic("failed to initialize gossip engine: " + err.Error())
 	}
-    // init handler: the handler now also has a reference to the gossip engine, allowing it to use gossip functionality when processing transactions.
+
 	handler := api.NewHandler(store, gossipEngine)
-    // routes
+
 	router.POST("/transaction", handler.AddTransaction)
 	router.GET("/transactions", handler.GetTransactions)
 	router.POST("/gossip", handler.GossipReceive)
 
-	if err := router.Run(":" + port); err != nil {
+	// Bind on all interfaces for Docker networking
+	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {
 		panic("failed to run server: " + err.Error())
 	}
 }
