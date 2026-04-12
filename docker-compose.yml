@@ -4,14 +4,14 @@ services:
     container_name: node1
     environment:
       PORT: "8080"
-      NODE_ADDR: "http://node1:8080"
+      NODE_ADDR: "http://node1:8080" # The NODE_ADDR environment variable is set to "http://node1:8080" for node1, which allows the node to identify itself and communicate with other nodes in the network. This address is used by the gossip protocol to send and receive transactions between nodes. By setting NODE_ADDR to the container's own address, it ensures that the node can correctly identify itself when participating in the peer-to-peer communication and gossiping transactions with its peers.
       PEERS_FILE: "/app/config/peers/node1.txt"
       LEDGER_FILE: "/app/data/ledger.json"
     ports:
       - "8081:8080"
     volumes:
-      - ./config/peers:/app/config/peers:ro
-      - node1_data:/app/data
+      - ./config/peers:/app/config/peers:ro # The volume mapping for the peers configuration is set to read-only (ro) to ensure that the container cannot modify the peer configuration files. This is important for maintaining the integrity of the peer list, as it prevents accidental or malicious changes to the configuration from within the container. By mapping the local directory containing the peer configuration files to a directory inside the container with read-only permissions, we ensure that the node can access the necessary peer information while safeguarding against unintended modifications.
+      - node1_data:/app/data # The volume mapping for the ledger data is set to read-write (rw) to allow the container to persist changes to the ledger. This is essential for the functionality of the node, as it needs to be able to write new transactions to the ledger file as they are processed. By mapping a named volume (node1_data) to the /app/data directory inside the container, we ensure that any changes made to the ledger.json file are saved and can be accessed even if the container is restarted or recreated. This allows for data persistence across container lifecycles, which is crucial for maintaining the state of the ledger in a distributed system.
 
   node2:
     build: .

@@ -17,10 +17,10 @@ transaction is new, saves it, and gossips it further if necessary.
 package api
 
 import (
-	"net/http"
-	"github.com/gin-gonic/gin"
+	"net/http" 
+	"github.com/gin-gonic/gin" // for HTTP routing and handling
 	gossip "p2pledger/Gossip_Engine"
-	"p2pledger/internal/models"
+	"p2pledger/internal/models" 
 	"p2pledger/internal/storage"
 )
 

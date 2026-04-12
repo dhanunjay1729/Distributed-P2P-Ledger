@@ -1,5 +1,5 @@
 /*
-Main entry point for the P2P ledger node
+Main entry point for the P2P ledger node that initializes the server, storage, and gossip engine, and defines API routes for transaction handling and gossiping.
 what does this file do?
 This file initializes the P2P ledger node by reading command-line arguments for the server port and peers file,
 setting up the Gin router, initializing the file-based storage for transactions, and creating the gossip engine with the provided peers. 
@@ -11,11 +11,33 @@ The command-line arguments expected by this program are:
 1. <port>: This is the port number on which the node will listen for incoming HTTP requests. 
 For example, if you want the node to listen on port 8080, you would provide "8080" as this argument.
 2. <peers_file>: This is the path to a file that contains a list of peer node addresses. 
-The gossip engine will read this file to know which other nodes it can communicate with for gossiping transactions. 
-The file should contain one peer address per line, in the format "http://<ip>:<port>". 
-For example, if you have two peers running on localhost on ports 8081 and 8082, the peers file might look like this:
-http://localhost:8081
-http://localhost:8082
+
+The gossip engine will read this file to know which other nodenode_a/main.go 
+
+Main real node server entrypoint (used by Docker build).
+Gossip_Engine/gossip.go
+Gossip engine: peer selection, dedup, forwarding, retries.
+
+internal/api/handler.go
+HTTP handlers for transaction submit/read/gossip receive.
+internal/storage/storage.go
+
+Storage interface.
+internal/storage/filestorage.go
+JSON-file storage implementation.
+
+internal/models/transactions.go
+Transaction struct.
+
+config/peers/node1.txt ... node6.txt
+Peer lists used in Docker 6-node network.
+docker-compose.yml
+Runs 6 node services with separate data volumes.
+
+Dockerfile
+Builds Go binary from ./node_a.
+internal/api/api_test.go, internal/storage/storage_test.go
+Unit tests for API and storage.
 
 
 what is gin router? 
@@ -39,16 +61,16 @@ why is it post?
 package main
 
 import (
-	"fmt"
-	"os"
-
-	gossip "p2pledger/Gossip_Engine"
-	"p2pledger/internal/api"
+	"fmt" 
+	"os" // for reading CLI args and env vars
+	gossip "p2pledger/Gossip_Engine" 
+	"p2pledger/internal/api" 
 	"p2pledger/internal/storage"
 
 	"github.com/gin-gonic/gin"
 )
 
+// It prioritizes configuration values from CLI arguments, then environment variables, and defaults to a fallback value.
 func getArgOrEnv(argIndex int, envKey string, fallback string) string {
 	if len(os.Args) > argIndex && os.Args[argIndex] != "" {
 		return os.Args[argIndex]
@@ -61,27 +83,30 @@ func getArgOrEnv(argIndex int, envKey string, fallback string) string {
 
 func main() {
 	// Priority: CLI args > ENV > fallback
-	port := getArgOrEnv(1, "PORT", "8080")
-	peersFile := getArgOrEnv(2, "PEERS_FILE", "peers.txt")
-	nodeAddr := getArgOrEnv(3, "NODE_ADDR", "http://localhost:"+port)
+	port := getArgOrEnv(1, "PORT", "8080") 
+	peersFile := getArgOrEnv(2, "PEERS_FILE", "peers.txt") 
+	nodeAddr := getArgOrEnv(3, "NODE_ADDR", "http://localhost:"+port) 
 	ledgerFile := getArgOrEnv(4, "LEDGER_FILE", "node_a/ledger_"+port+".json")
 
-	router := gin.Default()
+	router := gin.Default() 
 
-	store := storage.NewFileStorage(ledgerFile)
+	store := storage.NewFileStorage(ledgerFile) // Each node has its own ledger file to avoid conflicts in a multi-node setup. 
 
+	// Initialize gossip engine with peers and storage. The gossip engine will read the list of peers from the specified file and use the provided storage to manage transactions.
+	// The transaction storage in the gossip engine is used to keep track of all transactions that the node has seen and processed. This allows the gossip engine to determine whether an incoming transaction is new or has already been seen before. If a transaction is new, the gossip engine will mark it as seen and forward it to other peers. If it has already been seen, the gossip engine will ignore it to prevent redundant processing and forwarding, which helps to reduce network traffic and avoid infinite loops in the gossip protocol.
 	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store)
 	if err != nil {
 		panic("failed to initialize gossip engine: " + err.Error())
 	}
 
+	// Create API handler with storage and gossip engine. The API handler will use the storage to manage transactions and the gossip engine to forward new transactions to peers.
 	handler := api.NewHandler(store, gossipEngine)
 
 	router.POST("/transaction", handler.AddTransaction)
 	router.GET("/transactions", handler.GetTransactions)
 	router.POST("/gossip", handler.GossipReceive)
 
-	// Bind on all interfaces for Docker networking
+	// Bind on all interfaces for Docker networking.
 	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {
 		panic("failed to run server: " + err.Error())
 	}

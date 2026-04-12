@@ -12,16 +12,16 @@ The startServer method registers the handlers and starts the HTTP server.
 package gossip
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"bytes" // The bytes package in Go provides functions for manipulating byte slices. In this code, it is used to create a new reader from the JSON data when sending gossip messages to peers. Specifically, bytes.NewReader(jsonData) creates a new reader that reads from the byte slice containing the marshaled transaction data, allowing it to be sent in the body of an HTTP POST request. For example, when the sendGossip method marshals a transaction into JSON format, it uses bytes.NewReader to create a reader for that JSON data, which is then passed to the httpClient.Post method to send the gossip message to a peer.
+	"encoding/json" // The encoding/json package in Go provides functions for encoding and decoding JSON data. In this code, it is used to marshal a Transaction struct into JSON format before sending it to peers. Specifically, json.Marshal(tx) converts the Transaction struct into a JSON byte slice, which can then be sent in the body of an HTTP POST request when gossiping the transaction to other nodes in the network. For example, in the sendGossip method, the transaction is marshaled into JSON using json.Marshal, and if there is an error during this process, it logs the failure and returns without sending the gossip message.
+	"fmt" 
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
-	"time"
+	"sync" // The sync package in Go provides basic synchronization primitives such as mutexes. In this code, it is used to protect access to the 'seen' map, which keeps track of transaction IDs that have already been processed. The seenMu mutex is used to ensure that only one goroutine can read or write to the 'seen' map at a time, preventing race conditions. For example, in the isSeen method, the seenMu.RLock() is used to acquire a read lock before checking if a transaction ID is in the 'seen' map, and seenMu.RUnlock() is called afterward to release the lock. Similarly, in the acceptTransaction method, seenMu.Lock() is used to acquire a write lock when marking a transaction ID as seen, and seenMu.Unlock() is called afterward to release the lock.
+	"time" 
 
 	"p2pledger/internal/models"
 	"p2pledger/internal/storage"
@@ -29,8 +29,8 @@ import (
 
 const (
 	defaultFanout       = 2
-	maxSendRetries      = 3
-	initialRetryBackoff = 200 * time.Millisecond
+	maxSendRetries      = 3 
+	initialRetryBackoff = 200 * time.Millisecond 
 )
 
 // GossipEngine is the core structure that manages peer-to-peer gossip.
@@ -65,6 +65,8 @@ type GossipEngine struct {
 //   - *GossipEngine: initialised engine
 //   - error: if file reading fails
 //<---------------need to add new attribute for storage 
+
+// The function reads the peers file, trims whitespace, and filters out empty lines and the node's own address. It also ensures that the list of peers is unique. The random number generator is seeded to ensure different random sequences each run, which is important for selecting random peers in the gossip protocol. Finally, it initializes the GossipEngine struct with the list of peers, node address, an empty seen map, an HTTP client with a timeout, and the provided storage.
 func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage) (*GossipEngine, error) {
 	// Read the entire peers file (fine for small files; for large lists use bufio.Scanner)
 	data, err := os.ReadFile(peersFile)
@@ -125,7 +127,8 @@ func (g *GossipEngine) selectRandomPeers(n int) []string {
 	return selected
 }
 
-// isSeen checks whether a transaction ID has already been processed.
+// isSeen checks whether a transaction ID has already been processed. 
+// It uses a read lock to safely access the 'seen' map, allowing multiple concurrent reads while preventing writes during the check. This method is called before accepting a transaction to determine if it should be processed or ignored.
 func (g *GossipEngine) isSeen(txID string) bool {
 	g.seenMu.RLock()
 	defer g.seenMu.RUnlock()
@@ -141,6 +144,10 @@ func (g *GossipEngine) isSeen(txID string) bool {
 // acceptTransaction checks if a transaction is new and accepts it if so.
 // It returns true if the transaction was accepted, false if it was already known,
 // and an error if there was a problem during the process.
+
+
+// The method first checks the in-memory 'seen' map to quickly determine if the transaction ID has already been processed. If it has, it returns false without further processing. If it's new, it marks the transaction ID as seen in the 'seen' map. Then it checks the persistent store to see if the transaction already exists (in case of a restart or multiple nodes). If it exists, it returns false. If it's truly new, it saves the transaction to the store and returns true. If any error occurs during the existence check or saving process, it removes the transaction ID from the 'seen' map to allow for future retries and returns an error.
+
 func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 	g.seenMu.Lock()
 	if g.seen[tx.ID] {
@@ -226,6 +233,8 @@ func (g *GossipEngine) sendGossip(peerURL string, tx models.Transaction) {
 }
 
 // HandleIncoming processes a transaction received via /gossip.
+// If the transaction is new, it marks it as seen and then forwards it further (gossip).
+// This implements the "if exists → ignore; else → forward" rule.
 func (g *GossipEngine) HandleIncoming(tx models.Transaction) {
 	// Single path for local+incoming: accept + persist + forward if new.
 	g.Gossip(tx)
