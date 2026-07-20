@@ -1,120 +1,217 @@
-### To run three peers use the following command 
+# Distributed P2P Ledger (Go)
 
-```bash
-make run
+A simplified peer-to-peer ledger built in Go that propagates transactions across nodes using HTTP gossip and persists each node’s local view to JSON storage.
+
+## Overview
+
+This project demonstrates a lightweight distributed system design:
+
+- **Transaction API** for submitting and reading transactions
+- **Gossip propagation** to spread new transactions across peers
+- **Per-node persistent storage** using JSON files
+- **6-node Docker Compose topology** for local multi-node simulation
+
+Current implementation is focused on **transaction gossip + deduplication + persistence**. The README’s original consensus/longest-chain plan is still roadmap-level and not fully implemented in the current codebase.
+
+## Tech Stack
+
+- **Language:** Go (module: `p2pledger`, Go `1.25.0`)
+- **HTTP framework:** Gin (`github.com/gin-gonic/gin`)
+- **Containerization:** Docker + Docker Compose
+- **Storage:** File-based JSON ledger per node
+
+## Repository Structure
+
+```text
+.
+├── cmd/node/main.go                 # Minimal standalone net/http demo node
+├── node_a/main.go                   # Main runnable P2P node used by Makefile and Docker
+├── internal/
+│   ├── api/                         # HTTP handlers and API tests
+│   │   ├── handler.go
+│   │   └── api_test.go
+│   ├── models/                      # Domain models
+│   │   └── transactions.go
+│   └── storage/                     # Storage interface + file storage implementation + tests
+│       ├── storage.go
+│       ├── filestorage.go
+│       └── storage_test.go
+├── Gossip_Engine/gossip.go          # Gossip engine (fanout, retries, dedup, forwarding)
+├── config/peers/                    # Per-node peer lists (node1.txt ... node6.txt)
+├── docker-compose.yml               # 6-node local cluster (node1 ... node6)
+├── Dockerfile                       # Multi-stage build for node binary
+├── Makefile                         # Local run/test/docker utility commands
+└── README.md
 ```
 
-### Test through CURL
-```bash
-curl -X POST localhost:8001/transaction -H "Content-Type: application/json" -d '{"id":"tx3","data":"test","timestamp":123}'
+## How It Works
+
+### 1) Submit Transaction
+Client sends a transaction to `POST /transaction`:
+
+```json
+{
+  "id": "tx3",
+  "data": "Alice pays Bob 10",
+  "timestamp": 1730000000
+}
 ```
 
+Validation rules (in `internal/api/handler.go`):
 
+- `id` must be non-empty
+- `data` must be non-empty
+- `timestamp` must be > 0
 
-### Running API Tests
+### 2) Dedup + Persist
+The node checks if the transaction already exists (`TransactionExists`) and, if new, saves it to local storage (`SaveTransaction`).
 
-To run all tests for the project, use the following command in your terminal:
+### 3) Gossip Fanout
+The gossip engine selects random peers (`fanout = 2` by default) and sends the transaction to each peer via:
+
+- `POST /gossip`
+
+Incoming gossip is handled similarly:
+
+- if already known → ignore
+- if new → save locally and forward again
+
+This quickly propagates transactions through the network while limiting redundant rebroadcast loops.
+
+## API Endpoints
+
+Implemented in `internal/api/handler.go`:
+
+- `POST /transaction`
+  - Accepts new transaction JSON
+  - Triggers gossip when engine is configured
+  - Response examples:
+    - `202 Accepted` with `{"status":"gossip_started"}`
+    - `409 Conflict` if duplicate
+    - `400 Bad Request` for invalid input
+
+- `GET /transactions`
+  - Returns all locally stored transactions
+
+- `POST /gossip`
+  - Receives transaction from a peer node
+  - Calls `HandleIncoming` on gossip engine
+
+## Run Locally
+
+### Prerequisites
+
+- Go 1.25+
+- Make
+
+### Run 3 local nodes (without Docker)
+
+Use separate terminals:
+
+```bash
+make run-node1
+make run-node2
+make run-node3
+```
+
+Or run all three in one command:
+
+```bash
+make run-local-3
+```
+
+### Submit a transaction
+
+```bash
+curl -X POST http://localhost:8081/transaction \
+  -H "Content-Type: application/json" \
+  -d '{"id":"tx3","data":"test","timestamp":123}'
+```
+
+### Read transactions
+
+```bash
+curl http://localhost:8081/transactions
+```
+
+To query all 6 expected ports quickly:
+
+```bash
+make get-tx-all
+```
+
+## Run with Docker (6 nodes)
+
+### Start cluster
+
+```bash
+make docker-up-d
+```
+
+(or foreground logs)
+
+```bash
+make docker-up
+```
+
+### Check containers
+
+```bash
+make docker-ps
+```
+
+### Smoke test
+
+```bash
+make docker-smoke
+```
+
+### Tail logs
+
+```bash
+make docker-logs
+```
+
+### Stop cluster
+
+```bash
+make docker-down
+```
+
+## Test
+
+Run all tests:
 
 ```bash
 make test
 ```
 
-Exact problem statement 
+Run targeted suites:
 
-Simplified P2P Ledger via Gossip and Consensus
-The 6-Container Setup
-You will deploy 6 identical Docker containers (Node_A through Node_F). Each runs a simple Python (Flask) or Node.js web server.
+```bash
+make test-storage
+make test-api
+```
 
-Shared Logic: Every node has the exact same code.
+## Environment Variables
 
-Storage: Each node stores a local ledger.json file.
+Used by `node_a/main.go` + Docker Compose:
 
-Peer List: Every node knows the addresses of the other 5 nodes via a simple environment variable or a peers.txt file.
+- `PORT` – HTTP server port
+- `NODE_ADDR` – this node’s base URL (used for self-filtering/logging)
+- `PEERS_FILE` – path to peer list file
+- `LEDGER_FILE` – path to JSON ledger file
 
-1. Simplified Task: The "HTTP Gossip" Protocol
-Instead of low-level binary networking, we use standard HTTP POST requests.
+## Notes on Current State
 
-Trigger: When a user sends a new message (e.g., "Alice pays Bob $10") to Node_A.
+- The **gossip transaction pipeline is implemented** and integrated with API/storage.
+- `cmd/node/main.go` is a minimal demo entrypoint and differs from `node_a/main.go` (the practical runtime entrypoint used by scripts/compose).
+- Consensus/blockchain conflict resolution from the original problem statement (e.g., previous-hash validation, longest-chain replacement) is **not yet fully present in current implementation**.
 
-The Gossip Rule: Node_A saves the message locally and picks 2 random peers from its list. It sends the message to them.
+## Suggested Next Steps
 
-The Termination Rule: When a peer receives a message, it checks if it already exists in its local mempool. If Yes, it does nothing. If No, it saves it and forwards it to 2 other random peers.
-
-Result: Within milliseconds, all 6 nodes have the message without a central server.
-
-2. Simplified Task: Turn-Based Consensus
-To avoid "Mining" (Proof of Work), we use a Validation Rule based on the Previous Hash.
-
-Block Structure: * Index, Data, Timestamp, Previous_Hash, and Current_Hash.
-
-The Validation Rule: When a node receives a "New Block" from a peer, it only accepts it if:
-
-The Previous_Hash field matches the Current_Hash of its own last local block.
-
-The Index is exactly +1 of its own last index.
-
-The Agreement: If these two things match, the node appends the block and considers it "Truth."
-
-3. Simplified Task: Conflict Resolution (The Tie-Breaker)
-What if Node_A and Node_F create a new block at the exact same time?
-
-The Rule: The Longest Chain Wins.
-
-The Implementation: If Node_B receives a block that doesn't fit its current hash (a "fork"), it requests the entire chain from the sender.
-
-The Logic: If the sender's chain is longer (contains more blocks), Node_B deletes its local ledger.json and replaces it with the sender's version. This ensures the whole cluster eventually matches.
-
-
-
-
-
-
-
-
-WORK 
-
-PERSON A → Node Core + Storage
-Goal:
-Build a single-node working API
-
-Tasks:
-1. Project Setup
-Initialize Go module
-
-Folder structure:
-
-/cmd/node
-/internal/api
-/internal/models
-/internal/storage
-2. Define Model
-type Transaction struct {
-    ID        string `json:"id"`
-    Data      string `json:"data"`
-    Timestamp int64  `json:"timestamp"`
-}
-3. Storage Layer
-File: ledger.json
-
-Functions:
-
-LoadTransactions()
-SaveTransaction(tx Transaction)
-TransactionExists(id string)
-4. API Handlers
-Using Gin or net/http:
-
-POST /transaction
-
-Validate JSON
-
-Save transaction
-
-Return success
-
-GET /transactions
-
-Return all stored transactions
-
-Deliverable:
-→ You can POST manually and see it stored
+1. Add explicit block model (`Index`, `PreviousHash`, `CurrentHash`, etc.)
+2. Implement block validation endpoint and append rules
+3. Add chain sync endpoint for fork resolution
+4. Introduce deterministic tests for multi-node conflict scenarios
+5. Unify runtime entrypoint (`cmd/node` vs `node_a`) for cleaner architecture
