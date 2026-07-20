@@ -1,6 +1,13 @@
 # Distributed P2P Ledger (Go)
 
+![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)
+![Framework](https://img.shields.io/badge/HTTP-Gin-009688)
+![Runtime](https://img.shields.io/badge/Runtime-Docker%20Compose-2496ED?logo=docker)
+![Status](https://img.shields.io/badge/Status-Active%20Development-orange)
+
 A simplified peer-to-peer ledger built in Go that propagates transactions across nodes using HTTP gossip and persists each node’s local view to JSON storage.
+
+---
 
 ## Overview
 
@@ -11,14 +18,48 @@ This project demonstrates a lightweight distributed system design:
 - **Per-node persistent storage** using JSON files
 - **6-node Docker Compose topology** for local multi-node simulation
 
-Current implementation is focused on **transaction gossip + deduplication + persistence**. The README’s original consensus/longest-chain plan is still roadmap-level and not fully implemented in the current codebase.
+> Current implementation is focused on **transaction gossip + deduplication + persistence**.
+> The original consensus / longest-chain design is still a roadmap item and is not fully implemented yet.
+
+---
+
+## Architecture (Current)
+
+```mermaid
+flowchart LR
+    C[Client] -->|POST /transaction| N1[Node]
+
+    N1 -->|validate + dedup| S1[(Local ledger.json)]
+    N1 -->|fanout=2: POST /gossip| N2[Peer A]
+    N1 -->|fanout=2: POST /gossip| N3[Peer B]
+
+    N2 -->|if new: save + forward| N4[More peers]
+    N3 -->|if new: save + forward| N4
+
+    N2 --> S2[(Peer ledger.json)]
+    N3 --> S3[(Peer ledger.json)]
+```
+
+### Runtime flow
+
+1. Client submits transaction to `POST /transaction`
+2. Node validates required fields (`id`, `data`, `timestamp`)
+3. Node checks duplicate by transaction ID
+4. If new, transaction is persisted locally
+5. Node gossips transaction to randomly selected peers
+6. Receiving peers repeat dedup + persist + forward
+
+---
 
 ## Tech Stack
 
-- **Language:** Go (module: `p2pledger`, Go `1.25.0`)
+- **Language:** Go (`go 1.25.0`)
+- **Module:** `p2pledger`
 - **HTTP framework:** Gin (`github.com/gin-gonic/gin`)
 - **Containerization:** Docker + Docker Compose
 - **Storage:** File-based JSON ledger per node
+
+---
 
 ## Repository Structure
 
@@ -44,69 +85,89 @@ Current implementation is focused on **transaction gossip + deduplication + pers
 └── README.md
 ```
 
-## How It Works
-
-### 1) Submit Transaction
-Client sends a transaction to `POST /transaction`:
-
-```json
-{
-  "id": "tx3",
-  "data": "Alice pays Bob 10",
-  "timestamp": 1730000000
-}
-```
-
-Validation rules (in `internal/api/handler.go`):
-
-- `id` must be non-empty
-- `data` must be non-empty
-- `timestamp` must be > 0
-
-### 2) Dedup + Persist
-The node checks if the transaction already exists (`TransactionExists`) and, if new, saves it to local storage (`SaveTransaction`).
-
-### 3) Gossip Fanout
-The gossip engine selects random peers (`fanout = 2` by default) and sends the transaction to each peer via:
-
-- `POST /gossip`
-
-Incoming gossip is handled similarly:
-
-- if already known → ignore
-- if new → save locally and forward again
-
-This quickly propagates transactions through the network while limiting redundant rebroadcast loops.
+---
 
 ## API Endpoints
 
-Implemented in `internal/api/handler.go`:
+Implemented in `internal/api/handler.go`.
 
-- `POST /transaction`
-  - Accepts new transaction JSON
-  - Triggers gossip when engine is configured
-  - Response examples:
-    - `202 Accepted` with `{"status":"gossip_started"}`
-    - `409 Conflict` if duplicate
-    - `400 Bad Request` for invalid input
+### 1) `POST /transaction`
+Submit a new transaction.
 
-- `GET /transactions`
-  - Returns all locally stored transactions
+#### Request
+```bash
+curl -X POST http://localhost:8081/transaction \
+  -H "Content-Type: application/json" \
+  -d '{"id":"tx3","data":"Alice pays Bob 10","timestamp":1730000000}'
+```
 
-- `POST /gossip`
-  - Receives transaction from a peer node
-  - Calls `HandleIncoming` on gossip engine
+#### Success responses
+- `202 Accepted`
+```json
+{"status":"gossip_started"}
+```
 
-## Run Locally
+- `201 Created` (fallback mode when gossip engine is not configured)
+```json
+{"status":"saved_locally"}
+```
+
+#### Error responses
+- `400 Bad Request` (invalid JSON or missing fields)
+```json
+{"error":"id, data, timestamp are required"}
+```
+
+- `409 Conflict` (duplicate transaction id)
+```json
+{"error":"already exists"}
+```
+
+---
+
+### 2) `GET /transactions`
+Returns all transactions from the node’s local ledger.
+
+#### Request
+```bash
+curl http://localhost:8081/transactions
+```
+
+#### Success response
+- `200 OK`
+```json
+[
+  {
+    "id": "tx3",
+    "data": "Alice pays Bob 10",
+    "timestamp": 1730000000
+  }
+]
+```
+
+---
+
+### 3) `POST /gossip`
+Peer-to-peer endpoint used internally by nodes for propagation.
+
+#### Typical response
+- `200 OK`
+```json
+{"status":"received"}
+```
+
+---
+
+## Run Locally (Without Docker)
 
 ### Prerequisites
 
 - Go 1.25+
 - Make
 
-### Run 3 local nodes (without Docker)
+### Run 3 local nodes
 
-Use separate terminals:
+In separate terminals:
 
 ```bash
 make run-node1
@@ -114,47 +175,47 @@ make run-node2
 make run-node3
 ```
 
-Or run all three in one command:
+Or run them together:
 
 ```bash
 make run-local-3
 ```
 
-### Submit a transaction
+### Send a transaction
 
 ```bash
-curl -X POST http://localhost:8081/transaction \
-  -H "Content-Type: application/json" \
-  -d '{"id":"tx3","data":"test","timestamp":123}'
+make post-tx PORT=8081 TX_ID=tx-local-1 TX_DATA="local test" TX_TS=$(date +%s)
 ```
 
-### Read transactions
+### Check a node
 
 ```bash
-curl http://localhost:8081/transactions
+make get-tx PORT=8081
 ```
 
-To query all 6 expected ports quickly:
+### Check all expected node ports
 
 ```bash
 make get-tx-all
 ```
 
-## Run with Docker (6 nodes)
+---
 
-### Start cluster
+## Run with Docker (6 Nodes)
+
+### Start
 
 ```bash
 make docker-up-d
 ```
 
-(or foreground logs)
+(Foreground mode)
 
 ```bash
 make docker-up
 ```
 
-### Check containers
+### Validate cluster
 
 ```bash
 make docker-ps
@@ -166,52 +227,91 @@ make docker-ps
 make docker-smoke
 ```
 
-### Tail logs
+### Logs
 
 ```bash
 make docker-logs
 ```
 
-### Stop cluster
+### Stop
 
 ```bash
 make docker-down
 ```
 
-## Test
+---
 
-Run all tests:
+## Testing
+
+Run full test suite:
 
 ```bash
 make test
 ```
 
-Run targeted suites:
+Run specific suites:
 
 ```bash
 make test-storage
 make test-api
 ```
 
+---
+
 ## Environment Variables
 
-Used by `node_a/main.go` + Docker Compose:
+Used by `node_a/main.go` and Docker Compose:
 
-- `PORT` – HTTP server port
-- `NODE_ADDR` – this node’s base URL (used for self-filtering/logging)
-- `PEERS_FILE` – path to peer list file
-- `LEDGER_FILE` – path to JSON ledger file
+- `PORT` — HTTP server port
+- `NODE_ADDR` — node’s own base URL (used for self-filtering/logging)
+- `PEERS_FILE` — path to peer list file
+- `LEDGER_FILE` — path to JSON ledger file
 
-## Notes on Current State
+---
 
-- The **gossip transaction pipeline is implemented** and integrated with API/storage.
-- `cmd/node/main.go` is a minimal demo entrypoint and differs from `node_a/main.go` (the practical runtime entrypoint used by scripts/compose).
-- Consensus/blockchain conflict resolution from the original problem statement (e.g., previous-hash validation, longest-chain replacement) is **not yet fully present in current implementation**.
+## Troubleshooting
 
-## Suggested Next Steps
+### 1) `connection refused` on curl
+- Ensure the node is running (`make run-node1` or `make docker-up-d`)
+- Verify you are hitting the correct port (`8081`���`8086` in this repo)
 
-1. Add explicit block model (`Index`, `PreviousHash`, `CurrentHash`, etc.)
-2. Implement block validation endpoint and append rules
-3. Add chain sync endpoint for fork resolution
-4. Introduce deterministic tests for multi-node conflict scenarios
-5. Unify runtime entrypoint (`cmd/node` vs `node_a`) for cleaner architecture
+### 2) Docker nodes start but no gossip spread
+- Check peer files under `config/peers/`
+- Confirm `NODE_ADDR` and `PEERS_FILE` are correctly mounted in compose
+- Inspect logs with `make docker-logs`
+
+### 3) Duplicate transaction errors
+- This is expected for repeated IDs; transaction IDs are deduplicated
+- Use a new `TX_ID` each time when testing
+
+### 4) Empty transaction list
+- Query the same node where you posted first, then wait briefly for gossip propagation
+- Use `make get-tx-all` to inspect all nodes
+
+---
+
+## Current State vs Roadmap
+
+### Implemented now
+- Transaction validation API
+- Local JSON persistence
+- Transaction deduplication by ID
+- Random peer fanout gossip with retry/backoff
+- Multi-node local deployment with Docker Compose
+
+### Planned next
+- Block model (`Index`, `PreviousHash`, `CurrentHash`)
+- Block acceptance/validation rules
+- Fork detection + chain sync endpoint
+- Longest-chain conflict resolution
+- Deterministic integration tests for conflict scenarios
+
+---
+
+## Suggested Next Steps for Contributors
+
+1. Unify runtime entrypoint (`cmd/node` and `node_a`) into a single production path
+2. Add metrics/health endpoints (`/healthz`, gossip counters)
+3. Add idempotency tests for gossip storms
+4. Add fault-injection tests (peer timeout, partial network)
+5. Add CI workflow for `make test` and lint
