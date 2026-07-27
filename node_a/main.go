@@ -110,19 +110,19 @@ func main() {
 	// Create the mempool — the waiting room for unconfirmed transactions.
 	mp := mempool.NewMempool()
 
-	// Initialize the Proof of Work Miner
-	powMiner := miner.NewMiner(nodeAddr, mp, chainStore, difficulty, 10*time.Second)
-	
-	// Start mining in a background goroutine
-	go powMiner.Start()
-
 	// Initialize gossip engine with peers, storage, and mempool.
-	// The gossip engine will add incoming transactions to the mempool
-	// instead of writing directly to permanent storage.
-	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store, mp)
+	// We also pass chainStore so it can save incoming blocks.
+	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store, mp, chainStore)
 	if err != nil {
 		panic("failed to initialize gossip engine: " + err.Error())
 	}
+
+	// Initialize the Proof of Work Miner. We pass the gossip engine
+	// so the miner can broadcast blocks to the network once solved.
+	powMiner := miner.NewMiner(nodeAddr, mp, chainStore, gossipEngine, difficulty, 10*time.Second)
+	
+	// Start mining in a background goroutine
+	go powMiner.Start()
 
 	// Create API handler with storage, mempool, and gossip engine.
 	handler := api.NewHandler(store, mp, gossipEngine)
@@ -131,6 +131,7 @@ func main() {
 	router.GET("/transactions", handler.GetTransactions)
 	router.POST("/gossip", handler.GossipReceive)
 	router.GET("/mempool", handler.GetMempool)
+	router.POST("/block", handler.ReceiveBlock) // new route for incoming blocks
 
 	// Bind on all interfaces for Docker networking.
 	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {

@@ -21,25 +21,28 @@ import (
 	"p2pledger/internal/mempool"
 	"p2pledger/internal/models"
 	"p2pledger/internal/storage"
+	gossip "p2pledger/Gossip_Engine"
 )
 
 // Miner handles the creation of new blocks via Proof of Work.
 type Miner struct {
-	nodeAddr   string
-	mempool    *mempool.Mempool
-	chainStore storage.ChainStorage
-	difficulty int           // Number of leading zeros required in the hash
-	interval   time.Duration // How often to attempt mining
+	nodeAddr     string
+	mempool      *mempool.Mempool
+	chainStore   storage.ChainStorage
+	gossipEngine *gossip.GossipEngine
+	difficulty   int           // Number of leading zeros required in the hash
+	interval     time.Duration // How often to attempt mining
 }
 
 // NewMiner creates a new Miner instance.
-func NewMiner(nodeAddr string, mp *mempool.Mempool, cs storage.ChainStorage, diff int, interval time.Duration) *Miner {
+func NewMiner(nodeAddr string, mp *mempool.Mempool, cs storage.ChainStorage, ge *gossip.GossipEngine, diff int, interval time.Duration) *Miner {
 	return &Miner{
-		nodeAddr:   nodeAddr,
-		mempool:    mp,
-		chainStore: cs,
-		difficulty: diff,
-		interval:   interval,
+		nodeAddr:     nodeAddr,
+		mempool:      mp,
+		chainStore:   cs,
+		gossipEngine: ge,
+		difficulty:   diff,
+		interval:     interval,
 	}
 }
 
@@ -115,5 +118,8 @@ func (m *Miner) mineBlock() {
 	}
 	m.mempool.Remove(txIDs)
 
-	// TODO: Part 5 - Gossip this new block to peers!
+	// 7. Gossip this new block to peers!
+	if m.gossipEngine != nil {
+		m.gossipEngine.GossipBlock(newBlock)
+	}
 }

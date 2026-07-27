@@ -167,3 +167,30 @@ func (h *Handler) GetMempool(c *gin.Context) {
 		"transactions": h.Mempool.GetPending(),
 	})
 }
+
+// POST /block — receives a new block mined by a peer.
+func (h *Handler) ReceiveBlock(c *gin.Context) {
+	var block models.Block
+	if err := c.ShouldBindJSON(&block); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Basic check
+	if block.Hash == "" || block.PrevHash == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid block format"})
+		return
+	}
+
+	// Hand off to gossip engine which will validate and store it
+	if h.Gossip != nil {
+		if err := h.Gossip.HandleIncomingBlock(block); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"status": "block_accepted"})
+		return
+	}
+
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "gossip engine not configured"})
+}

@@ -39,14 +39,17 @@ const (
 // a local store of all transactions, a mempool for unconfirmed transactions,
 // and an HTTP client for outgoing requests.
 type GossipEngine struct {
-	peers      []string
-	nodeAddr   string
-	seen       map[string]bool
-	seenMu     sync.RWMutex
-	httpClient *http.Client
-	store      storage.Storage
-	mempool    *mempool.Mempool
-	fanout     int
+	peers        []string
+	nodeAddr     string
+	seen         map[string]bool
+	seenMu       sync.RWMutex
+	seenBlocks   map[string]bool
+	seenBlocksMu sync.RWMutex
+	httpClient   *http.Client
+	store        storage.Storage
+	chainStore   storage.ChainStorage
+	mempool      *mempool.Mempool
+	fanout       int
 }
 
 // Transaction represents a piece of data to be gossiped across the network.
@@ -70,7 +73,7 @@ type GossipEngine struct {
 //<---------------need to add new attribute for storage 
 
 // The function reads the peers file, trims whitespace, and filters out empty lines and the node's own address. It also ensures that the list of peers is unique. The random number generator is seeded to ensure different random sequences each run, which is important for selecting random peers in the gossip protocol. Finally, it initializes the GossipEngine struct with the list of peers, node address, an empty seen map, an HTTP client with a timeout, the provided storage, and the mempool.
-func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *mempool.Mempool) (*GossipEngine, error) {
+func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *mempool.Mempool, cs storage.ChainStorage) (*GossipEngine, error) {
 	// Read the entire peers file (fine for small files; for large lists use bufio.Scanner)
 	data, err := os.ReadFile(peersFile)
 	if err != nil {
@@ -101,8 +104,10 @@ func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *memp
 		peers:      peers,
 		nodeAddr:   nodeAddr,
 		seen:       make(map[string]bool),
+		seenBlocks: make(map[string]bool),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		store:      store,
+		chainStore: cs,
 		mempool:    mp,
 		fanout:     defaultFanout,
 	}, nil
@@ -258,6 +263,97 @@ func (g *GossipEngine) HandleIncoming(tx models.Transaction) {
 }
 
 // NOTE:
-// Removed legacy net/http handlers from this package:
-// - gossipHandlerGreat — here is the final summary of what was changed in gossip.go, in simple words.
+// Removed legacy net/http handlers from this package.
 
+// --- Block Gossip ---
+
+// GossipBlock propagates a newly mined or newly received block to peers.
+func (g *GossipEngine) GossipBlock(block models.Block) {
+	g.seenBlocksMu.Lock()
+	if g.seenBlocks[block.Hash] {
+		g.seenBlocksMu.Unlock()
+		return // already gossiped
+	}
+	g.seenBlocks[block.Hash] = true
+	g.seenBlocksMu.Unlock()
+
+	targets := g.selectRandomPeers(g.fanout)
+	log.Printf("[%s] 📢 Gossiping Block #%d to %d peers: %v", g.nodeAddr, block.Index, len(targets), targets)
+
+	for _, peer := range targets {
+		go g.sendBlockGossip(peer, block)
+	}
+}
+
+// sendBlockGossip performs the HTTP POST to a peer for a block.
+func (g *GossipEngine) sendBlockGossip(peerURL string, block models.Block) {
+	jsonData, err := json.Marshal(block)
+	if err != nil {
+		log.Printf("[%s] ❌ Failed to marshal block: %v", g.nodeAddr, err)
+		return
+	}
+
+	url := fmt.Sprintf("%s/block", peerURL)
+	backoff := initialRetryBackoff
+
+	for i := 0; i < maxSendRetries; i++ {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(jsonData))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := g.httpClient.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusConflict {
+				return // success or already known
+			}
+		}
+
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+}
+
+// HandleIncomingBlock processes a block received from a peer.
+// It verifies if the block is new, attempts to append it to the local chain,
+// and if successful, removes the transactions from the mempool and gossips it further.
+func (g *GossipEngine) HandleIncomingBlock(block models.Block) error {
+	g.seenBlocksMu.Lock()
+	if g.seenBlocks[block.Hash] {
+		g.seenBlocksMu.Unlock()
+		return fmt.Errorf("block already seen")
+	}
+	g.seenBlocksMu.Unlock()
+
+	// Try to add the block to the local chain
+	if g.chainStore != nil {
+		if err := g.chainStore.AddBlock(block); err != nil {
+			// This can happen if the block is invalid, or if we have a conflict
+			// (i.e. another miner won the race and our chain is on a different path).
+			return fmt.Errorf("failed to add block to chain: %w", err)
+		}
+	}
+
+	// Block accepted! Mark as seen.
+	g.seenBlocksMu.Lock()
+	g.seenBlocks[block.Hash] = true
+	g.seenBlocksMu.Unlock()
+
+	log.Printf("[%s] 📥 Accepted Block #%d from network (Hash: %s)", g.nodeAddr, block.Index, block.Hash[:10]+"...")
+
+	// Remove these transactions from the waiting room, since they are now confirmed
+	if g.mempool != nil && len(block.Transactions) > 0 {
+		txIDs := make([]string, len(block.Transactions))
+		for i, tx := range block.Transactions {
+			txIDs[i] = tx.ID
+		}
+		g.mempool.Remove(txIDs)
+	}
+
+	// Propagate it further
+	go g.GossipBlock(block)
+
+	return nil
+}
