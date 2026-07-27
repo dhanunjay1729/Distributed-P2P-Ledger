@@ -90,8 +90,7 @@ func main() {
 	port := getArgOrEnv(1, "PORT", "8080") 
 	peersFile := getArgOrEnv(2, "PEERS_FILE", "peers.txt") 
 	nodeAddr := getArgOrEnv(3, "NODE_ADDR", "http://localhost:"+port) 
-	ledgerFile := getArgOrEnv(4, "LEDGER_FILE", "node_a/ledger_"+port+".json")
-	chainFile := getArgOrEnv(5, "CHAIN_FILE", "node_a/chain_"+port+".json")
+	chainFile := getArgOrEnv(4, "CHAIN_FILE", "node_a/chain_"+port+".json")
 	
 	difficultyStr := getArgOrEnv(6, "DIFFICULTY", "2")
 	difficulty, err := strconv.Atoi(difficultyStr)
@@ -101,7 +100,6 @@ func main() {
 
 	router := gin.Default() 
 
-	store := storage.NewFileStorage(ledgerFile) // Legacy flat storage
 	chainStore, err := storage.NewFileChainStorage(chainFile) // Blockchain storage
 	if err != nil {
 		panic("failed to initialize chain storage: " + err.Error())
@@ -110,9 +108,8 @@ func main() {
 	// Create the mempool — the waiting room for unconfirmed transactions.
 	mp := mempool.NewMempool()
 
-	// Initialize gossip engine with peers, storage, and mempool.
-	// We also pass chainStore so it can save incoming blocks.
-	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store, mp, chainStore)
+	// Initialize gossip engine with peers, mempool, and chain storage.
+	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, mp, chainStore)
 	if err != nil {
 		panic("failed to initialize gossip engine: " + err.Error())
 	}
@@ -124,8 +121,8 @@ func main() {
 	// Start mining in a background goroutine
 	go powMiner.Start()
 
-	// Create API handler with storage, mempool, and gossip engine.
-	handler := api.NewHandler(store, chainStore, mp, gossipEngine)
+	// Create API handler with chain storage, mempool, and gossip engine.
+	handler := api.NewHandler(chainStore, mp, gossipEngine)
 
 	router.POST("/transaction", handler.AddTransaction)
 	router.GET("/transactions", handler.GetTransactions)
@@ -133,6 +130,7 @@ func main() {
 	router.GET("/mempool", handler.GetMempool)
 	router.POST("/block", handler.ReceiveBlock) // new route for incoming blocks
 	router.GET("/chain", handler.GetChain) // new route for conflict resolution
+	router.GET("/healthz", handler.GetHealthz) // liveness probe
 
 	// Bind on all interfaces for Docker networking.
 	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {

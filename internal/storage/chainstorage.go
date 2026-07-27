@@ -25,6 +25,7 @@ type ChainStorage interface {
 	GetChain() ([]models.Block, error)
 	GetLatestBlock() (models.Block, error)
 	ReplaceChain(newChain []models.Block) error
+	TransactionExists(txID string) (bool, error)
 }
 
 // FileChainStorage implements ChainStorage using a local JSON file.
@@ -138,6 +139,24 @@ func (fs *FileChainStorage) ReplaceChain(newChain []models.Block) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	return fs.saveUnlocked(newChain)
+}
+
+// TransactionExists checks if a transaction is already permanently recorded in any block.
+func (fs *FileChainStorage) TransactionExists(txID string) (bool, error) {
+	chain, err := fs.GetChain()
+	if err != nil {
+		return false, err
+	}
+	
+	// Start from latest blocks as they are more likely to contain recent transactions
+	for i := len(chain) - 1; i >= 0; i-- {
+		for _, tx := range chain[i].Transactions {
+			if tx.ID == txID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // ValidateChain is a utility function to verify cryptographic integrity.

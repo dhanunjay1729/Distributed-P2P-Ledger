@@ -46,7 +46,6 @@ type GossipEngine struct {
 	seenBlocks   map[string]bool
 	seenBlocksMu sync.RWMutex
 	httpClient   *http.Client
-	store        storage.Storage
 	chainStore   storage.ChainStorage
 	mempool      *mempool.Mempool
 	fanout       int
@@ -73,7 +72,7 @@ type GossipEngine struct {
 //<---------------need to add new attribute for storage 
 
 // The function reads the peers file, trims whitespace, and filters out empty lines and the node's own address. It also ensures that the list of peers is unique. The random number generator is seeded to ensure different random sequences each run, which is important for selecting random peers in the gossip protocol. Finally, it initializes the GossipEngine struct with the list of peers, node address, an empty seen map, an HTTP client with a timeout, the provided storage, and the mempool.
-func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *mempool.Mempool, cs storage.ChainStorage) (*GossipEngine, error) {
+func NewGossipEngine(peersFile, nodeAddr string, mp *mempool.Mempool, cs storage.ChainStorage) (*GossipEngine, error) {
 	// Read the entire peers file (fine for small files; for large lists use bufio.Scanner)
 	data, err := os.ReadFile(peersFile)
 	if err != nil {
@@ -106,7 +105,6 @@ func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *memp
 		seen:       make(map[string]bool),
 		seenBlocks: make(map[string]bool),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
-		store:      store,
 		chainStore: cs,
 		mempool:    mp,
 		fanout:     defaultFanout,
@@ -171,30 +169,29 @@ func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 	g.seenMu.Unlock()
 
 	// Check permanent storage (for already-mined transactions)
-	exists, err := g.store.TransactionExists(tx.ID)
-	if err != nil {
-		g.seenMu.Lock()
-		delete(g.seen, tx.ID)
-		g.seenMu.Unlock()
-		return false, fmt.Errorf("exists check failed: %w", err)
+	var exists bool
+	var err error
+	if g.chainStore != nil {
+		exists, err = g.chainStore.TransactionExists(tx.ID)
+		if err != nil {
+			g.seenMu.Lock()
+			delete(g.seen, tx.ID)
+			g.seenMu.Unlock()
+			return false, fmt.Errorf("exists check failed: %w", err)
+		}
 	}
 	if exists {
 		return false, nil
 	}
 
-	// If mempool is available, add there (transactions wait for mining).
-	// Otherwise fall back to direct storage (legacy/test mode).
+	// Add to mempool (transactions wait for mining).
 	if g.mempool != nil {
 		if !g.mempool.Add(tx) {
 			return false, nil // already in mempool
 		}
 	} else {
-		if err := g.store.SaveTransaction(tx); err != nil {
-			g.seenMu.Lock()
-			delete(g.seen, tx.ID)
-			g.seenMu.Unlock()
-			return false, fmt.Errorf("save failed: %w", err)
-		}
+		// Fatal fallback: shouldn't happen in the new blockchain architecture
+		return false, fmt.Errorf("mempool is required to process transactions")
 	}
 
 	return true, nil

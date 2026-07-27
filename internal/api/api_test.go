@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"p2pledger/internal/mempool"
 	"p2pledger/internal/models"
 	"p2pledger/internal/storage"
 )
@@ -25,8 +27,10 @@ import (
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
-	store := storage.NewFileStorage("test_api.json")
-	handler := NewHandler(store, nil, nil)
+	chainStore, _ := storage.NewFileChainStorage("test_api_chain.json")
+	defer os.Remove("test_api_chain.json")
+	mp := mempool.NewMempool()
+	handler := NewHandler(chainStore, mp, nil)
 
 	r := gin.Default()
 	r.POST("/transaction", handler.AddTransaction)
@@ -39,8 +43,9 @@ func TestAddTransactionAPI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tmpDir := t.TempDir()
-	store := storage.NewFileStorage(filepath.Join(tmpDir, "ledger.json"))
-	h := NewHandler(store, nil, nil) // no gossip in unit test
+	chainStore, _ := storage.NewFileChainStorage(filepath.Join(tmpDir, "chain.json"))
+	mp := mempool.NewMempool()
+	h := NewHandler(chainStore, mp, nil) // no gossip in unit test
 
 	r := gin.New()
 	r.POST("/transaction", h.AddTransaction)
@@ -59,8 +64,8 @@ func TestAddTransactionAPI(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// In no-gossip mode AddTransaction returns 201 (saved_locally)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d, body=%s", http.StatusCreated, w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected status %d, got %d, body=%s", http.StatusAccepted, w.Code, w.Body.String())
 	}
 }
 

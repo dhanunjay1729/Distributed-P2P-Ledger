@@ -26,20 +26,18 @@ import (
 )
 
 type Handler struct {
-	Store      storage.Storage
 	ChainStore storage.ChainStorage // For reading the blockchain
 	Gossip     *gossip.GossipEngine
 	Mempool    *mempool.Mempool
 }
 
 // NewHandler creates an API handler.
-func NewHandler(store storage.Storage, cs storage.ChainStorage, mp *mempool.Mempool, g ...*gossip.GossipEngine) *Handler {
+func NewHandler(cs storage.ChainStorage, mp *mempool.Mempool, g ...*gossip.GossipEngine) *Handler {
 	var ge *gossip.GossipEngine
 	if len(g) > 0 {
 		ge = g[0]
 	}
 	return &Handler{
-		Store:      store,
 		ChainStore: cs,
 		Gossip:     ge,
 		Mempool:    mp,
@@ -78,15 +76,16 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 	}
 
 	// Dedup check: is it already in permanent storage (already mined)?
-	exists, err := h.Store.TransactionExists(tx.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if exists {
-		c.JSON(http.StatusConflict, gin.H{"error": "already exists"})
-		return
+	if h.ChainStore != nil {
+		exists, err := h.ChainStore.TransactionExists(tx.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if exists {
+			c.JSON(http.StatusConflict, gin.H{"error": "already exists"})
+			return
+		}
 	}
 
 	// If gossip engine is wired, use gossip path (adds to mempool + forwards to peers).
@@ -103,27 +102,29 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 		return
 	}
 
-	// Legacy fallback for old tests without mempool.
-	if err := h.Store.SaveTransaction(tx); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"status": "saved_locally"})
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "no mempool or gossip engine configured"})
 }
 
 // GET /transactions
-
+// This is a legacy endpoint, now modified to extract all transactions from the entire blockchain.
 func (h *Handler) GetTransactions(c *gin.Context) {
-	// TODO:
-	// 1. Load from storage
-	// 2. Return JSON
-	txs, err := h.Store.LoadTransactions()
+	if h.ChainStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "chain storage not configured"})
+		return
+	}
 
+	chain, err := h.ChainStore.GetChain()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, txs)
+
+	var allTxs []models.Transaction
+	for _, block := range chain {
+		allTxs = append(allTxs, block.Transactions...)
+	}
+
+	c.JSON(http.StatusOK, allTxs)
 }
 
 
@@ -210,4 +211,9 @@ func (h *Handler) GetChain(c *gin.Context) {
 	}
 	
 	c.JSON(http.StatusOK, chain)
+}
+
+// GET /healthz — liveness probe for Docker/K8s.
+func (h *Handler) GetHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

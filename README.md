@@ -18,8 +18,8 @@ This project demonstrates a lightweight distributed system design:
 - **Per-node persistent storage** using JSON files
 - **6-node Docker Compose topology** for local multi-node simulation
 
-> Current implementation is focused on **transaction gossip + deduplication + persistence**.
-> The original consensus / longest-chain design is still a roadmap item and is not fully implemented yet.
+> Current implementation includes **Mempool, Proof of Work Mining, Block Gossip, and Longest Chain Consensus**.
+> The project has successfully evolved from a simple gossip ledger into a fully functional decentralized blockchain network!
 
 ---
 
