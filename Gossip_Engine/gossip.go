@@ -332,7 +332,9 @@ func (g *GossipEngine) HandleIncomingBlock(block models.Block) error {
 		if err := g.chainStore.AddBlock(block); err != nil {
 			// This can happen if the block is invalid, or if we have a conflict
 			// (i.e. another miner won the race and our chain is on a different path).
-			return fmt.Errorf("failed to add block to chain: %w", err)
+			// Let's trigger a network-wide consensus check.
+			go g.ResolveConflicts()
+			return fmt.Errorf("failed to add block, triggering conflict resolution: %w", err)
 		}
 	}
 
@@ -356,4 +358,53 @@ func (g *GossipEngine) HandleIncomingBlock(block models.Block) error {
 	go g.GossipBlock(block)
 
 	return nil
+}
+
+// ResolveConflicts implements the Longest Chain Rule.
+// It asks all peers for their chains, and if it finds a valid chain that is
+// longer than its own, it replaces its local chain with the peer's chain.
+func (g *GossipEngine) ResolveConflicts() {
+	if g.chainStore == nil {
+		return
+	}
+	
+	log.Printf("[%s] 🔄 Resolving conflicts... checking peers for longer chains", g.nodeAddr)
+	
+	localChain, err := g.chainStore.GetChain()
+	if err != nil {
+		return
+	}
+	
+	maxLength := len(localChain)
+	var longestChain []models.Block
+	chainReplaced := false
+
+	for _, peer := range g.peers {
+		url := fmt.Sprintf("%s/chain", peer)
+		resp, err := g.httpClient.Get(url)
+		if err != nil {
+			continue // peer might be down
+		}
+
+		var peerChain []models.Block
+		if err := json.NewDecoder(resp.Body).Decode(&peerChain); err == nil {
+			// Check if peer's chain is longer AND cryptographically valid
+			if len(peerChain) > maxLength && storage.ValidateChain(peerChain) {
+				maxLength = len(peerChain)
+				longestChain = peerChain
+				chainReplaced = true
+			}
+		}
+		resp.Body.Close()
+	}
+
+	// If we found a longer valid chain, adopt it
+	if chainReplaced {
+		log.Printf("[%s] ⚠️ Fork resolved! Replaced local chain with longer chain from network (New length: %d)", g.nodeAddr, maxLength)
+		if err := g.chainStore.ReplaceChain(longestChain); err != nil {
+			log.Printf("[%s] ❌ Failed to replace chain during resolution: %v", g.nodeAddr, err)
+		}
+	} else {
+		log.Printf("[%s] ✅ Local chain is the longest (or tied). No replacement needed.", g.nodeAddr)
+	}
 }

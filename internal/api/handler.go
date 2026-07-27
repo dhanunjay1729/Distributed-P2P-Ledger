@@ -26,22 +26,23 @@ import (
 )
 
 type Handler struct {
-	Store   storage.Storage
-	Gossip  *gossip.GossipEngine   //note newly added  change to integrate 
-	Mempool *mempool.Mempool        // unconfirmed transaction waiting room
+	Store      storage.Storage
+	ChainStore storage.ChainStorage // For reading the blockchain
+	Gossip     *gossip.GossipEngine
+	Mempool    *mempool.Mempool
 }
 
-// NewHandler creates an API handler. The mempool parameter can be nil for
-// backward compatibility with tests that don't need a mempool.
-func NewHandler(store storage.Storage, mp *mempool.Mempool, g ...*gossip.GossipEngine) *Handler {
+// NewHandler creates an API handler.
+func NewHandler(store storage.Storage, cs storage.ChainStorage, mp *mempool.Mempool, g ...*gossip.GossipEngine) *Handler {
 	var ge *gossip.GossipEngine
 	if len(g) > 0 {
 		ge = g[0]
 	}
 	return &Handler{
-		Store:   store,
-		Gossip:  ge,
-		Mempool: mp,
+		Store:      store,
+		ChainStore: cs,
+		Gossip:     ge,
+		Mempool:    mp,
 	}
 }
 
@@ -193,4 +194,20 @@ func (h *Handler) ReceiveBlock(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "gossip engine not configured"})
+}
+
+// GET /chain — returns the full blockchain. Used by peers to resolve conflicts.
+func (h *Handler) GetChain(c *gin.Context) {
+	if h.ChainStore == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "chain storage not configured"})
+		return
+	}
+	
+	chain, err := h.ChainStore.GetChain()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(http.StatusOK, chain)
 }

@@ -125,13 +125,14 @@ func main() {
 	go powMiner.Start()
 
 	// Create API handler with storage, mempool, and gossip engine.
-	handler := api.NewHandler(store, mp, gossipEngine)
+	handler := api.NewHandler(store, chainStore, mp, gossipEngine)
 
 	router.POST("/transaction", handler.AddTransaction)
 	router.GET("/transactions", handler.GetTransactions)
 	router.POST("/gossip", handler.GossipReceive)
 	router.GET("/mempool", handler.GetMempool)
 	router.POST("/block", handler.ReceiveBlock) // new route for incoming blocks
+	router.GET("/chain", handler.GetChain) // new route for conflict resolution
 
 	// Bind on all interfaces for Docker networking.
 	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {
