@@ -23,6 +23,7 @@ import (
 	"sync" // The sync package in Go provides basic synchronization primitives such as mutexes. In this code, it is used to protect access to the 'seen' map, which keeps track of transaction IDs that have already been processed. The seenMu mutex is used to ensure that only one goroutine can read or write to the 'seen' map at a time, preventing race conditions. For example, in the isSeen method, the seenMu.RLock() is used to acquire a read lock before checking if a transaction ID is in the 'seen' map, and seenMu.RUnlock() is called afterward to release the lock. Similarly, in the acceptTransaction method, seenMu.Lock() is used to acquire a write lock when marking a transaction ID as seen, and seenMu.Unlock() is called afterward to release the lock.
 	"time" 
 
+	"p2pledger/internal/mempool"
 	"p2pledger/internal/models"
 	"p2pledger/internal/storage"
 )
@@ -35,7 +36,8 @@ const (
 
 // GossipEngine is the core structure that manages peer-to-peer gossip.
 // It holds the list of peers, a set of seen transaction IDs (to avoid loops),
-// a local store of all transactions, and an HTTP client for outgoing requests.
+// a local store of all transactions, a mempool for unconfirmed transactions,
+// and an HTTP client for outgoing requests.
 type GossipEngine struct {
 	peers      []string
 	nodeAddr   string
@@ -43,6 +45,7 @@ type GossipEngine struct {
 	seenMu     sync.RWMutex
 	httpClient *http.Client
 	store      storage.Storage
+	mempool    *mempool.Mempool
 	fanout     int
 }
 
@@ -66,8 +69,8 @@ type GossipEngine struct {
 //   - error: if file reading fails
 //<---------------need to add new attribute for storage 
 
-// The function reads the peers file, trims whitespace, and filters out empty lines and the node's own address. It also ensures that the list of peers is unique. The random number generator is seeded to ensure different random sequences each run, which is important for selecting random peers in the gossip protocol. Finally, it initializes the GossipEngine struct with the list of peers, node address, an empty seen map, an HTTP client with a timeout, and the provided storage.
-func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage) (*GossipEngine, error) {
+// The function reads the peers file, trims whitespace, and filters out empty lines and the node's own address. It also ensures that the list of peers is unique. The random number generator is seeded to ensure different random sequences each run, which is important for selecting random peers in the gossip protocol. Finally, it initializes the GossipEngine struct with the list of peers, node address, an empty seen map, an HTTP client with a timeout, the provided storage, and the mempool.
+func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage, mp *mempool.Mempool) (*GossipEngine, error) {
 	// Read the entire peers file (fine for small files; for large lists use bufio.Scanner)
 	data, err := os.ReadFile(peersFile)
 	if err != nil {
@@ -100,6 +103,7 @@ func NewGossipEngine(peersFile, nodeAddr string, store storage.Storage) (*Gossip
 		seen:       make(map[string]bool),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		store:      store,
+		mempool:    mp,
 		fanout:     defaultFanout,
 	}, nil
 }
@@ -144,10 +148,14 @@ func (g *GossipEngine) isSeen(txID string) bool {
 // acceptTransaction checks if a transaction is new and accepts it if so.
 // It returns true if the transaction was accepted, false if it was already known,
 // and an error if there was a problem during the process.
-
-
-// The method first checks the in-memory 'seen' map to quickly determine if the transaction ID has already been processed. If it has, it returns false without further processing. If it's new, it marks the transaction ID as seen in the 'seen' map. Then it checks the persistent store to see if the transaction already exists (in case of a restart or multiple nodes). If it exists, it returns false. If it's truly new, it saves the transaction to the store and returns true. If any error occurs during the existence check or saving process, it removes the transaction ID from the 'seen' map to allow for future retries and returns an error.
-
+//
+// The method first checks the in-memory 'seen' map to quickly determine if the
+// transaction ID has already been processed. If it has, it returns false without
+// further processing. If it's new, it marks the transaction ID as seen in the
+// 'seen' map. Then it checks the persistent store to see if the transaction
+// already exists (e.g., already mined into a block). If it exists, it returns
+// false. If it's truly new, it adds the transaction to the mempool (if available)
+// or falls back to direct storage.
 func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 	g.seenMu.Lock()
 	if g.seen[tx.ID] {
@@ -157,6 +165,7 @@ func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 	g.seen[tx.ID] = true
 	g.seenMu.Unlock()
 
+	// Check permanent storage (for already-mined transactions)
 	exists, err := g.store.TransactionExists(tx.ID)
 	if err != nil {
 		g.seenMu.Lock()
@@ -168,11 +177,19 @@ func (g *GossipEngine) acceptTransaction(tx models.Transaction) (bool, error) {
 		return false, nil
 	}
 
-	if err := g.store.SaveTransaction(tx); err != nil {
-		g.seenMu.Lock()
-		delete(g.seen, tx.ID)
-		g.seenMu.Unlock()
-		return false, fmt.Errorf("save failed: %w", err)
+	// If mempool is available, add there (transactions wait for mining).
+	// Otherwise fall back to direct storage (legacy/test mode).
+	if g.mempool != nil {
+		if !g.mempool.Add(tx) {
+			return false, nil // already in mempool
+		}
+	} else {
+		if err := g.store.SaveTransaction(tx); err != nil {
+			g.seenMu.Lock()
+			delete(g.seen, tx.ID)
+			g.seenMu.Unlock()
+			return false, fmt.Errorf("save failed: %w", err)
+		}
 	}
 
 	return true, nil

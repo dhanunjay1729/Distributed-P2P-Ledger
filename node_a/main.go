@@ -65,6 +65,7 @@ import (
 	"os" // for reading CLI args and env vars
 	gossip "p2pledger/Gossip_Engine" 
 	"p2pledger/internal/api" 
+	"p2pledger/internal/mempool"
 	"p2pledger/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -92,19 +93,24 @@ func main() {
 
 	store := storage.NewFileStorage(ledgerFile) // Each node has its own ledger file to avoid conflicts in a multi-node setup. 
 
-	// Initialize gossip engine with peers and storage. The gossip engine will read the list of peers from the specified file and use the provided storage to manage transactions.
-	// The transaction storage in the gossip engine is used to keep track of all transactions that the node has seen and processed. This allows the gossip engine to determine whether an incoming transaction is new or has already been seen before. If a transaction is new, the gossip engine will mark it as seen and forward it to other peers. If it has already been seen, the gossip engine will ignore it to prevent redundant processing and forwarding, which helps to reduce network traffic and avoid infinite loops in the gossip protocol.
-	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store)
+	// Create the mempool — the waiting room for unconfirmed transactions.
+	mp := mempool.NewMempool()
+
+	// Initialize gossip engine with peers, storage, and mempool.
+	// The gossip engine will add incoming transactions to the mempool
+	// instead of writing directly to permanent storage.
+	gossipEngine, err := gossip.NewGossipEngine(peersFile, nodeAddr, store, mp)
 	if err != nil {
 		panic("failed to initialize gossip engine: " + err.Error())
 	}
 
-	// Create API handler with storage and gossip engine. The API handler will use the storage to manage transactions and the gossip engine to forward new transactions to peers.
-	handler := api.NewHandler(store, gossipEngine)
+	// Create API handler with storage, mempool, and gossip engine.
+	handler := api.NewHandler(store, mp, gossipEngine)
 
 	router.POST("/transaction", handler.AddTransaction)
 	router.GET("/transactions", handler.GetTransactions)
 	router.POST("/gossip", handler.GossipReceive)
+	router.GET("/mempool", handler.GetMempool)
 
 	// Bind on all interfaces for Docker networking.
 	if err := router.Run(fmt.Sprintf("0.0.0.0:%s", port)); err != nil {

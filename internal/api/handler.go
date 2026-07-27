@@ -20,25 +20,28 @@ import (
 	"net/http" 
 	"github.com/gin-gonic/gin" // for HTTP routing and handling
 	gossip "p2pledger/Gossip_Engine"
+	"p2pledger/internal/mempool"
 	"p2pledger/internal/models" 
 	"p2pledger/internal/storage"
 )
 
 type Handler struct {
-	Store storage.Storage
-	Gossip *gossip.GossipEngine   //note newly added  change to integrate 
-
+	Store   storage.Storage
+	Gossip  *gossip.GossipEngine   //note newly added  change to integrate 
+	Mempool *mempool.Mempool        // unconfirmed transaction waiting room
 }
 
-// Backward-compatible: NewHandler(store) OR NewHandler(store, gossipEngine)
-func NewHandler(store storage.Storage, g ...*gossip.GossipEngine) *Handler {
+// NewHandler creates an API handler. The mempool parameter can be nil for
+// backward compatibility with tests that don't need a mempool.
+func NewHandler(store storage.Storage, mp *mempool.Mempool, g ...*gossip.GossipEngine) *Handler {
 	var ge *gossip.GossipEngine
 	if len(g) > 0 {
 		ge = g[0]
 	}
 	return &Handler{
-		Store:  store,
-		Gossip: ge,
+		Store:   store,
+		Gossip:  ge,
+		Mempool: mp,
 	}
 }
 
@@ -67,6 +70,13 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 		return
 	}
 
+	// Dedup check: is it already in the mempool?
+	if h.Mempool != nil && h.Mempool.Exists(tx.ID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "already exists"})
+		return
+	}
+
+	// Dedup check: is it already in permanent storage (already mined)?
 	exists, err := h.Store.TransactionExists(tx.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -78,14 +88,21 @@ func (h *Handler) AddTransaction(c *gin.Context) {
 		return
 	}
 
-	// If gossip engine is wired, use gossip path.
+	// If gossip engine is wired, use gossip path (adds to mempool + forwards to peers).
 	if h.Gossip != nil {
 		h.Gossip.Gossip(tx)
 		c.JSON(http.StatusAccepted, gin.H{"status": "gossip_started"})
 		return
 	}
 
-	// Fallback for tests/single-node mode.
+	// Fallback: add directly to mempool (single-node / no-gossip mode).
+	if h.Mempool != nil {
+		h.Mempool.Add(tx)
+		c.JSON(http.StatusAccepted, gin.H{"status": "added_to_mempool"})
+		return
+	}
+
+	// Legacy fallback for old tests without mempool.
 	if err := h.Store.SaveTransaction(tx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -135,6 +152,18 @@ func (h *Handler) GossipReceive(c *gin.Context) {
 // POST /sync (optional for now)
 func (h *Handler) SyncTransactions(c *gin.Context) {
 	// TODO later
-    
 
+
+}
+
+// GET /mempool — returns all unconfirmed transactions waiting to be mined.
+func (h *Handler) GetMempool(c *gin.Context) {
+	if h.Mempool == nil {
+		c.JSON(http.StatusOK, []models.Transaction{})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"count":        h.Mempool.Size(),
+		"transactions": h.Mempool.GetPending(),
+	})
 }

@@ -26,7 +26,7 @@ func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
 	store := storage.NewFileStorage("test_api.json")
-	handler := NewHandler(store)
+	handler := NewHandler(store, nil)
 
 	r := gin.Default()
 	r.POST("/transaction", handler.AddTransaction)
@@ -40,7 +40,7 @@ func TestAddTransactionAPI(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	store := storage.NewFileStorage(filepath.Join(tmpDir, "ledger.json"))
-	h := NewHandler(store) // no gossip in unit test
+	h := NewHandler(store, nil) // no gossip in unit test
 
 	r := gin.New()
 	r.POST("/transaction", h.AddTransaction)
