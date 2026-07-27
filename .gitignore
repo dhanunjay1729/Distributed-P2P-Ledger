@@ -10,4 +10,4 @@ Node -A/Node.go
 
 # Optional: OS or editor files
 *.swp
-*.DS_Store
+*.DS_Store.understand-anything/
