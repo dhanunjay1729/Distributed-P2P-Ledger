@@ -63,9 +63,12 @@ package main
 import (
 	"fmt" 
 	"os" // for reading CLI args and env vars
+	"strconv"
+	"time"
 	gossip "p2pledger/Gossip_Engine" 
 	"p2pledger/internal/api" 
 	"p2pledger/internal/mempool"
+	"p2pledger/internal/miner"
 	"p2pledger/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -88,13 +91,30 @@ func main() {
 	peersFile := getArgOrEnv(2, "PEERS_FILE", "peers.txt") 
 	nodeAddr := getArgOrEnv(3, "NODE_ADDR", "http://localhost:"+port) 
 	ledgerFile := getArgOrEnv(4, "LEDGER_FILE", "node_a/ledger_"+port+".json")
+	chainFile := getArgOrEnv(5, "CHAIN_FILE", "node_a/chain_"+port+".json")
+	
+	difficultyStr := getArgOrEnv(6, "DIFFICULTY", "2")
+	difficulty, err := strconv.Atoi(difficultyStr)
+	if err != nil {
+		difficulty = 2 // default to 2 leading zeros
+	}
 
 	router := gin.Default() 
 
-	store := storage.NewFileStorage(ledgerFile) // Each node has its own ledger file to avoid conflicts in a multi-node setup. 
+	store := storage.NewFileStorage(ledgerFile) // Legacy flat storage
+	chainStore, err := storage.NewFileChainStorage(chainFile) // Blockchain storage
+	if err != nil {
+		panic("failed to initialize chain storage: " + err.Error())
+	}
 
 	// Create the mempool — the waiting room for unconfirmed transactions.
 	mp := mempool.NewMempool()
+
+	// Initialize the Proof of Work Miner
+	powMiner := miner.NewMiner(nodeAddr, mp, chainStore, difficulty, 10*time.Second)
+	
+	// Start mining in a background goroutine
+	go powMiner.Start()
 
 	// Initialize gossip engine with peers, storage, and mempool.
 	// The gossip engine will add incoming transactions to the mempool
