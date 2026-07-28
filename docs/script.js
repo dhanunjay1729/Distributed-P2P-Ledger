@@ -3,10 +3,10 @@ const NUM_NODES = 6; // Increased to 6 nodes
 const nodes = [];
 
 // Timings (Slowed down for readability)
-const PACKET_SPEED = 2000; // Time it takes a packet to travel
-const GOSSIP_DELAY = 1200; // Delay before gossiping to next peer
-const MINING_TIME_MIN = 6000; 
-const MINING_TIME_MAX = 12000;
+const PACKET_SPEED = 3500; // Time it takes a packet to travel
+const GOSSIP_DELAY = 2500; // Delay before gossiping to next peer
+const MINING_TIME_MIN = 10000; 
+const MINING_TIME_MAX = 18000;
 
 // DOM Elements
 const nodesContainer = document.getElementById('nodes-container');
@@ -99,14 +99,14 @@ class Node {
         if (!this.mempool.includes(tx) && !this.txInChain(tx)) {
             this.mempool.push(tx);
             this.updateUI();
-            this.showTooltip("1. Received TX. Adding to Mempool.", 2500, 'tooltip-purple');
+            this.showTooltip("1. Received TX. Adding to Mempool.", 4000, 'tooltip-purple');
             
             // Start mining if we aren't already
-            setTimeout(() => this.startMining(), 1500);
+            setTimeout(() => this.startMining(), 2500);
             
             // Gossip to neighbors (Slowed down for visibility)
             setTimeout(() => {
-                this.showTooltip("Gossiping TX to peers...", 2000, 'tooltip-purple');
+                this.showTooltip("Gossiping TX to peers...", 3000, 'tooltip-purple');
                 const targets = getNeighbors(this.id);
                 targets.forEach(targetId => {
                     animatePacket(this.id, targetId, 'tx', () => {
@@ -126,7 +126,7 @@ class Node {
         this.isMining = true;
         this.updateUI();
         
-        this.showTooltip("2. Grinding CPU to solve Block (PoW)...", 4000, 'tooltip-blue');
+        this.showTooltip("2. Grinding CPU to solve Block (PoW)...", 8000, 'tooltip-blue');
 
         // Random mining time
         const mineTime = Math.random() * (MINING_TIME_MAX - MINING_TIME_MIN) + MINING_TIME_MIN;
@@ -153,7 +153,7 @@ class Node {
         };
 
         logActivity(`⛏️ ${this.name} successfully mined Block #${block.index}`, 'log-mine');
-        this.showTooltip("3. Block Solved! Sending to network.", 4000, 'tooltip-green');
+        this.showTooltip("3. Block Solved! Sending to network.", 5000, 'tooltip-green');
         
         this.el.classList.add('success');
         setTimeout(() => this.el.classList.remove('success'), 1500);
@@ -174,12 +174,12 @@ class Node {
             this.updateUI();
 
             if (sourceName !== this.name) {
-                this.showTooltip(`4. Validated Block #${block.index}. Saved to chain!`, 3500, 'tooltip-green');
+                this.showTooltip(`4. Validated Block #${block.index}. Saved to chain!`, 5000, 'tooltip-green');
             }
 
             // If we have remaining txs, restart mining
             if (this.mempool.length > 0) {
-                setTimeout(() => this.startMining(), 2000);
+                setTimeout(() => this.startMining(), 3000);
             }
 
             // Gossip block to peers
@@ -195,11 +195,11 @@ class Node {
         } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
             // FORK DETECTED!
             logActivity(`⚠️ ${this.name} detected a fork at Block #${block.index}.`, 'log-fork');
-            this.showTooltip("Fork detected! Waiting for Longest Chain...", 5000, 'tooltip-red');
+            this.showTooltip("Fork detected! Waiting for Longest Chain...", 7000, 'tooltip-red');
         } else if (block.index > currentHeight + 1) {
             // Longest chain rule applied (resolving fork)
             logActivity(`⚖️ ${this.name} applying Longest Chain Rule. Syncing...`, 'log-gossip');
-            this.showTooltip("Longest Chain won! Discarding old chain.", 5000, 'tooltip-green');
+            this.showTooltip("Longest Chain won! Discarding old chain.", 7000, 'tooltip-green');
             
             this.chain = block.fullChainSnapshot; // Cheat for simulation
             this.mempool = [];
@@ -314,9 +314,9 @@ document.getElementById('trigger-fork-btn').addEventListener('click', () => {
             winnerBlock.fullChainSnapshot.push({ index: winnerBlock.index, hash: winnerBlock.hash });
             
             nodeA.receiveBlock(winnerBlock, nodeA.name);
-        }, 5000); // Wait 5 seconds so user can read the fork tooltips
+        }, 8000); // Wait 8 seconds so user can read the fork tooltips
         
-    }, 2500);
+    }, 4500);
 });
 
 // Start
