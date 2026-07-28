@@ -435,3 +435,22 @@ button {
 
 .tooltip-red { border-color: var(--accent-red); box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4); }
 .tooltip-red::after { border-color: var(--accent-red) transparent transparent transparent; }
+
+/* Flip tooltip below node when near top edge */
+.node-tooltip.tooltip-bottom {
+    bottom: auto;
+    top: calc(100% + 10px);
+}
+
+.node-tooltip.tooltip-bottom::after {
+    bottom: auto;
+    top: -6px;
+    border-width: 0 6px 6px;
+    border-color: transparent transparent var(--border-glass) transparent;
+}
+
+.node-tooltip.tooltip-bottom.tooltip-purple::after { border-color: transparent transparent var(--accent-purple) transparent; }
+.node-tooltip.tooltip-bottom.tooltip-blue::after { border-color: transparent transparent var(--accent-blue) transparent; }
+.node-tooltip.tooltip-bottom.tooltip-green::after { border-color: transparent transparent var(--accent-green) transparent; }
+.node-tooltip.tooltip-bottom.tooltip-red::after { border-color: transparent transparent var(--accent-red) transparent; }
+

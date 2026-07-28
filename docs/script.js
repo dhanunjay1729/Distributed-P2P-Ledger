@@ -17,11 +17,12 @@ const activityLog = document.getElementById('activity-log');
 
 // Node class
 class Node {
-    constructor(id, x, y) {
+    constructor(id, x, y, canvasHeight) {
         this.id = id;
         this.name = `Node ${String.fromCharCode(65 + id)}`;
         this.x = x;
         this.y = y;
+        this.canvasHeight = canvasHeight;
         this.mempool = [];
         this.chain = [{ index: 0, hash: '0000genesis', txs: [] }];
         this.isMining = false;
@@ -83,7 +84,11 @@ class Node {
 
     showTooltip(message, duration = 3000, colorClass = '') {
         this.tooltipEl.textContent = message;
-        this.tooltipEl.className = `node-tooltip show ${colorClass}`;
+        
+        // If node is in the top 40% of canvas, show tooltip BELOW the node
+        const isTopNode = this.y < this.canvasHeight * 0.4;
+        const posClass = isTopNode ? 'tooltip-bottom' : '';
+        this.tooltipEl.className = `node-tooltip show ${colorClass} ${posClass}`;
         
         clearTimeout(this.tooltipTimeout);
         this.tooltipTimeout = setTimeout(() => {
@@ -253,34 +258,23 @@ class Node {
     }
 }
 
-// Layout: 3 columns x 2 rows grid for guaranteed no-overlap
+// Layout: Elliptical (circular) with enough padding
 function initNetwork() {
     const canvasRect = document.querySelector('.network-canvas').getBoundingClientRect();
     const W = canvasRect.width;
     const H = canvasRect.height;
+    const centerX = W / 2;
+    const centerY = H / 2;
     
-    // 3 columns, 2 rows, evenly spaced
-    const cols = 3;
-    const rows = 2;
-    const padX = 120; // horizontal padding from edges
-    const padY = 100; // vertical padding from edges
-    
-    const colSpacing = (W - 2 * padX) / (cols - 1);
-    const rowSpacing = (H - 2 * padY) / (rows - 1);
-    
-    // Positions: Row 0 = [A, B, C], Row 1 = [D, E, F]
-    const positions = [];
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            positions.push({
-                x: padX + c * colSpacing,
-                y: padY + r * rowSpacing
-            });
-        }
-    }
+    // Ellipse radii — spread wider horizontally, tighter vertically
+    const radiusX = Math.max(centerX - 130, 200);
+    const radiusY = Math.max(centerY - 140, 140);
 
     for (let i = 0; i < NUM_NODES; i++) {
-        nodes.push(new Node(i, positions[i].x, positions[i].y));
+        const angle = (i * 2 * Math.PI) / NUM_NODES - Math.PI / 2;
+        const x = centerX + radiusX * Math.cos(angle);
+        const y = centerY + 20 + radiusY * Math.sin(angle);
+        nodes.push(new Node(i, x, y, H));
     }
 
     // Draw SVG connections
