@@ -15,6 +15,8 @@
   </h3>
 </div>
 
+> *Originally built as a collaborative P2P gossip ledger. Independently evolved into a full Proof-of-Work blockchain with mining, consensus, and fork resolution.*
+
 ---
 
 ## 📖 Overview
