@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'docs/**' # Only redeploy if the simulator changes
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
