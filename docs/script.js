@@ -2,11 +2,11 @@
 const NUM_NODES = 6; // Increased to 6 nodes
 const nodes = [];
 
-// Timings (Slowed down for readability)
-const PACKET_SPEED = 3500; // Time it takes a packet to travel
-const GOSSIP_DELAY = 2500; // Delay before gossiping to next peer
-const MINING_TIME_MIN = 10000; 
-const MINING_TIME_MAX = 18000;
+// Timings (Balanced for readability without causing endless network collisions)
+const PACKET_SPEED = 1800; // Travel time
+const GOSSIP_DELAY = 800; // Delay before forwarding
+const MINING_TIME_MIN = 8000; 
+const MINING_TIME_MAX = 25000;
 
 // DOM Elements
 const nodesContainer = document.getElementById('nodes-container');
@@ -195,7 +195,17 @@ class Node {
         } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
             // FORK DETECTED!
             logActivity(`⚠️ ${this.name} detected a fork at Block #${block.index}.`, 'log-fork');
-            this.showTooltip("Fork detected! Waiting for Longest Chain...", 7000, 'tooltip-red');
+            this.showTooltip("Fork detected! Resolving...", 5000, 'tooltip-red');
+            
+            // Simulator Tie-Breaker: In a real network, nodes wait for the next block to decide the longest chain.
+            // If the user didn't explicitly trigger a fork, we automatically tie-break via hash comparison 
+            // so the simulation doesn't get permanently split.
+            if (block.hash > this.chain[currentHeight].hash) {
+                this.chain[currentHeight] = block;
+                this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
+                this.stopMining();
+                this.updateUI();
+            }
         } else if (block.index > currentHeight + 1) {
             // Longest chain rule applied (resolving fork)
             logActivity(`⚖️ ${this.name} applying Longest Chain Rule. Syncing...`, 'log-gossip');
