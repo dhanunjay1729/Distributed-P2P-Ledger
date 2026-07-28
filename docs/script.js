@@ -152,7 +152,7 @@ class Node {
             txs: [...this.mempool]
         };
 
-        logActivity(`⛏️ ${this.name} successfully mined Block #${block.index}`, 'log-mine');
+        logActivity(`🏆 [Proof of Work] ${this.name} successfully solved Block #${block.index}! Broadcasting...`, 'log-mine');
         this.showTooltip("3. Block Solved! Sending to network.", 5000, 'tooltip-green');
         
         this.el.classList.add('success');
@@ -194,24 +194,24 @@ class Node {
             
         } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
             // FORK DETECTED!
-            logActivity(`⚠️ ${this.name} detected a fork at Block #${block.index}.`, 'log-fork');
+            logActivity(`⚠️ [Fork Detected] ${this.name} received a conflicting Block #${block.index}.`, 'log-fork');
             this.showTooltip("Fork detected! Resolving...", 5000, 'tooltip-red');
             
             // Simulator Tie-Breaker: In a real network, nodes wait for the next block to decide the longest chain.
             // If the user didn't explicitly trigger a fork, we automatically tie-break via hash comparison 
             // so the simulation doesn't get permanently split.
             if (block.hash > this.chain[currentHeight].hash) {
-                logActivity(`⚖️ ${this.name} resolved fork: Adopted stronger block ${block.hash.substring(0,6)}`, 'log-gossip');
+                logActivity(`⚖️ [Consensus] ${this.name} resolved the fork: Adopted the stronger block.`, 'log-gossip');
                 this.chain[currentHeight] = block;
                 this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
                 this.stopMining();
                 this.updateUI();
             } else {
-                logActivity(`🛡️ ${this.name} resolved fork: Rejected weaker block ${block.hash.substring(0,6)}`, 'log-gossip');
+                logActivity(`🛡️ [Consensus] ${this.name} resolved the fork: Kept its own block.`, 'log-gossip');
             }
         } else if (block.index > currentHeight + 1) {
             // Longest chain rule applied (resolving fork)
-            logActivity(`⚖️ ${this.name} applying Longest Chain Rule. Syncing...`, 'log-gossip');
+            logActivity(`👑 [Longest Chain] ${this.name} saw a longer chain and synced to it!`, 'log-gossip');
             this.showTooltip("Longest Chain won! Discarding old chain.", 7000, 'tooltip-green');
             
             this.chain = block.fullChainSnapshot; // Cheat for simulation
@@ -227,13 +227,13 @@ function initNetwork() {
     const canvasRect = document.querySelector('.network-canvas').getBoundingClientRect();
     const centerX = canvasRect.width / 2;
     const centerY = canvasRect.height / 2;
-    const radius = Math.min(centerX, centerY) - 120;
+    const radius = Math.min(centerX, centerY) - 170; // Increased padding so top node isn't clipped
 
     // Create Nodes in a circle
     for (let i = 0; i < NUM_NODES; i++) {
         const angle = (i * 2 * Math.PI) / NUM_NODES - Math.PI / 2;
         const x = centerX + radius * Math.cos(angle);
-        const y = centerY + radius * Math.sin(angle);
+        const y = centerY + 30 + radius * Math.sin(angle); // Shifted down by 30px
         nodes.push(new Node(i, x, y));
     }
 
@@ -293,7 +293,7 @@ function logActivity(msg, className = '') {
 // Event Listeners
 document.getElementById('send-tx-btn').addEventListener('click', () => {
     const txId = `tx_${Math.random().toString(36).substr(2, 4)}`;
-    logActivity(`📨 Client sent transaction ${txId}`, 'log-gossip');
+    logActivity(`📝 [Client] Sent new transaction '${txId}' into the network.`, 'log-gossip');
     
     // Pick a random node to receive the tx
     const randomNode = nodes[Math.floor(Math.random() * NUM_NODES)];
@@ -301,7 +301,7 @@ document.getElementById('send-tx-btn').addEventListener('click', () => {
 });
 
 document.getElementById('trigger-fork-btn').addEventListener('click', () => {
-    logActivity(`🚨 Simulating network fork...`, 'log-fork');
+    logActivity(`🚨 [Simulation] Triggering a forced network split...`, 'log-fork');
     
     const nodeA = nodes[0];
     const nodeC = nodes[2];
@@ -313,11 +313,11 @@ document.getElementById('trigger-fork-btn').addEventListener('click', () => {
     nodeC.mineBlock();
 
     setTimeout(() => {
-        logActivity(`⚔️ Network is split! Wait for next block to resolve...`, 'log-fork');
+        logActivity(`⚔️ [Simulation] Network is split! Waiting for a winner...`, 'log-fork');
         
         // Force Node A to mine the NEXT block to win the longest chain
         setTimeout(() => {
-            logActivity(`👑 Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain...`, 'log-mine');
+            logActivity(`👑 [Simulation] Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain...`, 'log-mine');
             const winnerBlock = {
                 index: nodeA.chain.length,
                 hash: '0000winner',
