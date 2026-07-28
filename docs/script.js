@@ -227,13 +227,17 @@ function initNetwork() {
     const canvasRect = document.querySelector('.network-canvas').getBoundingClientRect();
     const centerX = canvasRect.width / 2;
     const centerY = canvasRect.height / 2;
-    const radius = Math.min(centerX, centerY) - 170; // Increased padding so top node isn't clipped
+    
+    // Use an elliptical layout to spread nodes horizontally
+    // Rectangular nodes need more X-axis padding than Y-axis padding
+    const radiusX = Math.max(centerX - 160, 200); 
+    const radiusY = Math.max(centerY - 130, 150); 
 
-    // Create Nodes in a circle
+    // Create Nodes in an ellipse
     for (let i = 0; i < NUM_NODES; i++) {
         const angle = (i * 2 * Math.PI) / NUM_NODES - Math.PI / 2;
-        const x = centerX + radius * Math.cos(angle);
-        const y = centerY + 30 + radius * Math.sin(angle); // Shifted down by 30px
+        const x = centerX + radiusX * Math.cos(angle);
+        const y = centerY + 30 + radiusY * Math.sin(angle); // Shifted down by 30px
         nodes.push(new Node(i, x, y));
     }
 
