@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Simulator | Distributed P2P Ledger</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Sidebar: Controls and Logs -->
+        <aside class="sidebar glass-panel">
+            <div class="header">
+                <h1>P2P Blockchain</h1>
+                <p class="subtitle">Live System Simulator</p>
+            </div>
+            
+            <div class="explainer">
+                <p>Watch as transactions are <strong>Gossiped</strong> between nodes, placed in the <strong>Mempool</strong>, and secured via <strong>Proof of Work</strong>.</p>
+            </div>
+
+            <div class="controls">
+                <button id="send-tx-btn" class="primary-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    Send Transaction
+                </button>
+                <button id="trigger-fork-btn" class="secondary-btn" title="Forces two nodes to mine simultaneously">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V12"></path><path d="M12 12C12 7.5 16 7.5 16 3"></path><path d="M12 12C12 7.5 8 7.5 8 3"></path><circle cx="12" cy="22" r="3"></circle><circle cx="16" cy="3" r="3"></circle><circle cx="8" cy="3" r="3"></circle></svg>
+                    Simulate Fork
+                </button>
+            </div>
+            
+            <div class="log-container">
+                <h3>Network Activity</h3>
+                <ul id="activity-log">
+                    <li>System initialized. Awaiting transactions...</li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Canvas: Visual Network -->
+        <main class="network-canvas">
+            <svg id="connections-svg"></svg>
+            <div id="nodes-container">
+                <!-- Nodes injected by JS -->
+            </div>
+            <!-- Container for animated packets -->
+            <div id="packets-container"></div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
