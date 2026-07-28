@@ -1,11 +1,12 @@
 // State
-const NUM_NODES = 6; // Increased to 6 nodes
+const NUM_NODES = 6;
 const nodes = [];
+let lastMinedTx = null; // Track last mined TX for double-spend demo
 
-// Timings (Balanced for readability without causing endless network collisions)
-const PACKET_SPEED = 1800; // Travel time
-const GOSSIP_DELAY = 800; // Delay before forwarding
-const MINING_TIME_MIN = 8000; 
+// Timings
+const PACKET_SPEED = 1800;
+const GOSSIP_DELAY = 800;
+const MINING_TIME_MIN = 8000;
 const MINING_TIME_MAX = 25000;
 
 // DOM Elements
@@ -14,15 +15,15 @@ const svgContainer = document.getElementById('connections-svg');
 const packetsContainer = document.getElementById('packets-container');
 const activityLog = document.getElementById('activity-log');
 
-// Setup Nodes
+// Node class
 class Node {
     constructor(id, x, y) {
         this.id = id;
-        this.name = `Node ${String.fromCharCode(65 + id)}`; // Node A, B, C...
+        this.name = `Node ${String.fromCharCode(65 + id)}`;
         this.x = x;
         this.y = y;
         this.mempool = [];
-        this.chain = [{ index: 0, hash: '0000genesis' }];
+        this.chain = [{ index: 0, hash: '0000genesis', txs: [] }];
         this.isMining = false;
         this.miningInterval = null;
         this.tooltipTimeout = null;
@@ -36,11 +37,14 @@ class Node {
         this.el.style.left = `${this.x}px`;
         this.el.style.top = `${this.y}px`;
         
-        // Add tooltip element
         this.tooltipEl = document.createElement('div');
         this.tooltipEl.className = 'node-tooltip';
         this.el.appendChild(this.tooltipEl);
 
+        this.contentEl = document.createElement('div');
+        this.contentEl.className = 'node-content';
+        this.el.appendChild(this.contentEl);
+        
         this.updateUI();
         nodesContainer.appendChild(this.el);
     }
@@ -50,33 +54,25 @@ class Node {
         const chainHTML = this.chain.slice().reverse().map(b => 
             `<div class="block-item">
                 <span>Block #${b.index}</span>
-                <span class="hash-preview">${b.hash.substring(0,6)}...</span>
+                <span class="hash-preview">${b.hash.substring(0,8)}…</span>
             </div>`
         ).join('');
 
-        // We update the innerHTML of specific sections to not destroy the tooltip
-        let header = this.el.querySelector('.node-header');
-        if (!header) {
-            this.el.insertAdjacentHTML('afterbegin', `
-                <div class="node-header">
-                    <span class="node-title">${this.name}</span>
-                    <span class="node-status">${this.isMining ? 'Mining...' : 'Idle'}</span>
-                </div>
-                <div class="mining-indicator"><div class="mining-progress"></div></div>
-                <div class="node-section">
-                    <h4>Mempool (Waiting Room)</h4>
-                    <div class="mempool-list"></div>
-                </div>
-                <div class="node-section">
-                    <h4>Blockchain (Permanent)</h4>
-                    <div class="chain-list"></div>
-                </div>
-            `);
-        } else {
-            this.el.querySelector('.node-status').textContent = this.isMining ? 'Mining...' : 'Idle';
-            this.el.querySelector('.mempool-list').innerHTML = mempoolHTML;
-            this.el.querySelector('.chain-list').innerHTML = chainHTML;
-        }
+        this.contentEl.innerHTML = `
+            <div class="node-header">
+                <span class="node-title">${this.name}</span>
+                <span class="node-status">${this.isMining ? 'Mining…' : 'Idle'}</span>
+            </div>
+            <div class="mining-indicator"><div class="mining-progress"></div></div>
+            <div class="node-section">
+                <h4>Mempool</h4>
+                <div class="mempool-list">${mempoolHTML}</div>
+            </div>
+            <div class="node-section">
+                <h4>Blockchain</h4>
+                <div class="chain-list">${chainHTML}</div>
+            </div>
+        `;
 
         if (this.isMining) {
             this.el.classList.add('mining');
@@ -95,18 +91,36 @@ class Node {
         }, duration);
     }
 
+    // Check if a tx is already confirmed in the blockchain
+    txExistsInChain(tx) {
+        for (let i = 1; i < this.chain.length; i++) {
+            if (this.chain[i].txs && this.chain[i].txs.includes(tx)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     receiveTx(tx) {
-        if (!this.mempool.includes(tx) && !this.txInChain(tx)) {
+        // DOUBLE-SPEND CHECK: Reject if TX already in blockchain
+        if (this.txExistsInChain(tx)) {
+            this.showTooltip(`❌ REJECTED: Already in chain!`, 5000, 'tooltip-red');
+            this.el.classList.add('rejected');
+            setTimeout(() => this.el.classList.remove('rejected'), 1500);
+            logActivity(`🚫 [Security] ${this.name} rejected double-spend of '${tx}'`, 'log-security');
+            return; // Do NOT gossip it further
+        }
+
+        if (!this.mempool.includes(tx)) {
             this.mempool.push(tx);
             this.updateUI();
-            this.showTooltip("1. Received TX. Adding to Mempool.", 4000, 'tooltip-purple');
+            this.showTooltip("1. Received TX → Mempool", 4000, 'tooltip-purple');
             
-            // Start mining if we aren't already
             setTimeout(() => this.startMining(), 2500);
             
-            // Gossip to neighbors (Slowed down for visibility)
+            // Gossip to neighbors
             setTimeout(() => {
-                this.showTooltip("Gossiping TX to peers...", 3000, 'tooltip-purple');
+                this.showTooltip("Gossiping TX to peers…", 3000, 'tooltip-purple');
                 const targets = getNeighbors(this.id);
                 targets.forEach(targetId => {
                     animatePacket(this.id, targetId, 'tx', () => {
@@ -117,8 +131,30 @@ class Node {
         }
     }
 
-    txInChain(tx) {
-        return false; 
+    // Attempt a double-spend (for the demo button)
+    attemptDoubleSpend(tx) {
+        this.showTooltip(`⚠️ Double-spend attempt: ${tx}`, 5000, 'tooltip-red');
+        logActivity(`🕵️ [Attack] Attacker re-submits '${tx}' to ${this.name}…`, 'log-security');
+        
+        // Send the TX into the network — nodes will reject it
+        setTimeout(() => {
+            // Gossip the fraudulent TX to all neighbors
+            const targets = getNeighbors(this.id);
+            targets.forEach(targetId => {
+                animatePacket(this.id, targetId, 'rejected-packet', () => {
+                    nodes[targetId].receiveTx(tx);
+                    // Continue spreading so all nodes get a chance to reject
+                    setTimeout(() => {
+                        const nextTargets = getNeighbors(targetId);
+                        nextTargets.forEach(nextId => {
+                            animatePacket(targetId, nextId, 'rejected-packet', () => {
+                                nodes[nextId].receiveTx(tx);
+                            });
+                        });
+                    }, GOSSIP_DELAY);
+                });
+            });
+        }, 800);
     }
 
     startMining() {
@@ -126,13 +162,12 @@ class Node {
         this.isMining = true;
         this.updateUI();
         
-        this.showTooltip("2. Grinding CPU to solve Block (PoW)...", 8000, 'tooltip-blue');
+        this.showTooltip("2. Solving Block (PoW)…", 8000, 'tooltip-blue');
 
-        // Random mining time
         const mineTime = Math.random() * (MINING_TIME_MAX - MINING_TIME_MIN) + MINING_TIME_MIN;
         
         this.miningInterval = setTimeout(() => {
-            if (!this.isMining) return; // aborted
+            if (!this.isMining) return;
             this.mineBlock();
         }, mineTime);
     }
@@ -152,8 +187,13 @@ class Node {
             txs: [...this.mempool]
         };
 
-        logActivity(`🏆 [Proof of Work] ${this.name} successfully solved Block #${block.index}! Broadcasting...`, 'log-mine');
-        this.showTooltip("3. Block Solved! Sending to network.", 5000, 'tooltip-green');
+        // Track the last mined TX for double-spend demo
+        if (block.txs.length > 0) {
+            lastMinedTx = block.txs[0];
+        }
+
+        logActivity(`🏆 [Proof of Work] ${this.name} solved Block #${block.index}! Broadcasting…`, 'log-mine');
+        this.showTooltip("3. Block Solved! Broadcasting.", 5000, 'tooltip-green');
         
         this.el.classList.add('success');
         setTimeout(() => this.el.classList.remove('success'), 1500);
@@ -165,19 +205,15 @@ class Node {
         const currentHeight = this.chain.length - 1;
         
         if (block.index > currentHeight) {
-            // Adopt new block
             this.chain.push(block);
-            
-            // Clear mempool of mined txs
             this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
-            this.stopMining(); // Stop mining current batch because block is solved
+            this.stopMining();
             this.updateUI();
 
             if (sourceName !== this.name) {
-                this.showTooltip(`4. Validated Block #${block.index}. Saved to chain!`, 5000, 'tooltip-green');
+                this.showTooltip(`4. Validated Block #${block.index} ✓`, 5000, 'tooltip-green');
             }
 
-            // If we have remaining txs, restart mining
             if (this.mempool.length > 0) {
                 setTimeout(() => this.startMining(), 3000);
             }
@@ -193,28 +229,23 @@ class Node {
             }, GOSSIP_DELAY);
             
         } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
-            // FORK DETECTED!
-            logActivity(`⚠️ [Fork Detected] ${this.name} received a conflicting Block #${block.index}.`, 'log-fork');
-            this.showTooltip("Fork detected! Resolving...", 5000, 'tooltip-red');
+            logActivity(`⚠️ [Fork] ${this.name} received conflicting Block #${block.index}.`, 'log-fork');
+            this.showTooltip("Fork! Resolving…", 5000, 'tooltip-red');
             
-            // Simulator Tie-Breaker: In a real network, nodes wait for the next block to decide the longest chain.
-            // If the user didn't explicitly trigger a fork, we automatically tie-break via hash comparison 
-            // so the simulation doesn't get permanently split.
             if (block.hash > this.chain[currentHeight].hash) {
-                logActivity(`⚖️ [Consensus] ${this.name} resolved the fork: Adopted the stronger block.`, 'log-gossip');
+                logActivity(`⚖️ [Consensus] ${this.name} adopted the stronger block.`, 'log-gossip');
                 this.chain[currentHeight] = block;
                 this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
                 this.stopMining();
                 this.updateUI();
             } else {
-                logActivity(`🛡️ [Consensus] ${this.name} resolved the fork: Kept its own block.`, 'log-gossip');
+                logActivity(`🛡️ [Consensus] ${this.name} kept its own block.`, 'log-gossip');
             }
         } else if (block.index > currentHeight + 1) {
-            // Longest chain rule applied (resolving fork)
-            logActivity(`👑 [Longest Chain] ${this.name} saw a longer chain and synced to it!`, 'log-gossip');
-            this.showTooltip("Longest Chain won! Discarding old chain.", 7000, 'tooltip-green');
+            logActivity(`👑 [Longest Chain] ${this.name} synced to a longer chain!`, 'log-gossip');
+            this.showTooltip("Longest Chain wins! Syncing…", 7000, 'tooltip-green');
             
-            this.chain = block.fullChainSnapshot; // Cheat for simulation
+            this.chain = block.fullChainSnapshot;
             this.mempool = [];
             this.stopMining();
             this.updateUI();
@@ -222,26 +253,37 @@ class Node {
     }
 }
 
-// Initialization
+// Layout: 3 columns x 2 rows grid for guaranteed no-overlap
 function initNetwork() {
     const canvasRect = document.querySelector('.network-canvas').getBoundingClientRect();
-    const centerX = canvasRect.width / 2;
-    const centerY = canvasRect.height / 2;
+    const W = canvasRect.width;
+    const H = canvasRect.height;
     
-    // Use an elliptical layout to spread nodes horizontally
-    // Rectangular nodes need more X-axis padding than Y-axis padding
-    const radiusX = Math.max(centerX - 160, 200); 
-    const radiusY = Math.max(centerY - 130, 150); 
-
-    // Create Nodes in an ellipse
-    for (let i = 0; i < NUM_NODES; i++) {
-        const angle = (i * 2 * Math.PI) / NUM_NODES - Math.PI / 2;
-        const x = centerX + radiusX * Math.cos(angle);
-        const y = centerY + 30 + radiusY * Math.sin(angle); // Shifted down by 30px
-        nodes.push(new Node(i, x, y));
+    // 3 columns, 2 rows, evenly spaced
+    const cols = 3;
+    const rows = 2;
+    const padX = 120; // horizontal padding from edges
+    const padY = 100; // vertical padding from edges
+    
+    const colSpacing = (W - 2 * padX) / (cols - 1);
+    const rowSpacing = (H - 2 * padY) / (rows - 1);
+    
+    // Positions: Row 0 = [A, B, C], Row 1 = [D, E, F]
+    const positions = [];
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            positions.push({
+                x: padX + c * colSpacing,
+                y: padY + r * rowSpacing
+            });
+        }
     }
 
-    // Draw SVG connections (fully connected graph for simplicity)
+    for (let i = 0; i < NUM_NODES; i++) {
+        nodes.push(new Node(i, positions[i].x, positions[i].y));
+    }
+
+    // Draw SVG connections
     let svgHTML = '';
     for (let i = 0; i < NUM_NODES; i++) {
         for (let j = i + 1; j < NUM_NODES; j++) {
@@ -253,9 +295,8 @@ function initNetwork() {
 
 // Helpers
 function getNeighbors(nodeId) {
-    // Pick 2 random peers to gossip to
     const others = [];
-    for (let i=0; i<NUM_NODES; i++) {
+    for (let i = 0; i < NUM_NODES; i++) {
         if (i !== nodeId) others.push(i);
     }
     return others.sort(() => 0.5 - Math.random()).slice(0, 2);
@@ -271,12 +312,11 @@ function animatePacket(fromId, toId, type, onComplete) {
     packet.style.top = `${start.y}px`;
     packetsContainer.appendChild(packet);
 
-    // Animate using Web Animations API
     const animation = packet.animate([
         { left: `${start.x}px`, top: `${start.y}px` },
         { left: `${end.x}px`, top: `${end.y}px` }
     ], {
-        duration: PACKET_SPEED, // Slower travel time
+        duration: PACKET_SPEED,
         easing: 'ease-in-out'
     });
 
@@ -294,18 +334,35 @@ function logActivity(msg, className = '') {
     activityLog.scrollTop = activityLog.scrollHeight;
 }
 
-// Event Listeners
+// === EVENT LISTENERS ===
+
+// Send Transaction
 document.getElementById('send-tx-btn').addEventListener('click', () => {
     const txId = `tx_${Math.random().toString(36).substr(2, 4)}`;
-    logActivity(`📝 [Client] Sent new transaction '${txId}' into the network.`, 'log-gossip');
+    logActivity(`📝 [Client] Sent transaction '${txId}' into the network.`, 'log-gossip');
     
-    // Pick a random node to receive the tx
     const randomNode = nodes[Math.floor(Math.random() * NUM_NODES)];
     randomNode.receiveTx(txId);
 });
 
+// Double Spend Attack
+document.getElementById('double-spend-btn').addEventListener('click', () => {
+    if (!lastMinedTx) {
+        logActivity(`⏳ [Info] Send a transaction first and wait for it to be mined!`);
+        return;
+    }
+    
+    logActivity(`🚨 [Attack] Attempting to double-spend '${lastMinedTx}'…`, 'log-security');
+    logActivity(`💡 [Info] This TX was already confirmed in the blockchain. Every honest node should reject it.`, 'log-security');
+    
+    // Pick a random node to submit the fraudulent TX
+    const attackNode = nodes[Math.floor(Math.random() * NUM_NODES)];
+    attackNode.attemptDoubleSpend(lastMinedTx);
+});
+
+// Simulate Fork
 document.getElementById('trigger-fork-btn').addEventListener('click', () => {
-    logActivity(`🚨 [Simulation] Triggering a forced network split...`, 'log-fork');
+    logActivity(`🚨 [Simulation] Triggering a forced network split…`, 'log-fork');
     
     const nodeA = nodes[0];
     const nodeC = nodes[2];
@@ -317,11 +374,10 @@ document.getElementById('trigger-fork-btn').addEventListener('click', () => {
     nodeC.mineBlock();
 
     setTimeout(() => {
-        logActivity(`⚔️ [Simulation] Network is split! Waiting for a winner...`, 'log-fork');
+        logActivity(`⚔️ [Simulation] Network is split! Waiting for a winner…`, 'log-fork');
         
-        // Force Node A to mine the NEXT block to win the longest chain
         setTimeout(() => {
-            logActivity(`👑 [Simulation] Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain...`, 'log-mine');
+            logActivity(`👑 [Simulation] Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain…`, 'log-mine');
             const winnerBlock = {
                 index: nodeA.chain.length,
                 hash: '0000winner',
@@ -331,7 +387,7 @@ document.getElementById('trigger-fork-btn').addEventListener('click', () => {
             winnerBlock.fullChainSnapshot.push({ index: winnerBlock.index, hash: winnerBlock.hash });
             
             nodeA.receiveBlock(winnerBlock, nodeA.name);
-        }, 8000); // Wait 8 seconds so user can read the fork tooltips
+        }, 8000);
         
     }, 4500);
 });
