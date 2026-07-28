@@ -201,10 +201,13 @@ class Node {
             // If the user didn't explicitly trigger a fork, we automatically tie-break via hash comparison 
             // so the simulation doesn't get permanently split.
             if (block.hash > this.chain[currentHeight].hash) {
+                logActivity(`⚖️ ${this.name} resolved fork: Adopted stronger block ${block.hash.substring(0,6)}`, 'log-gossip');
                 this.chain[currentHeight] = block;
                 this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
                 this.stopMining();
                 this.updateUI();
+            } else {
+                logActivity(`🛡️ ${this.name} resolved fork: Rejected weaker block ${block.hash.substring(0,6)}`, 'log-gossip');
             }
         } else if (block.index > currentHeight + 1) {
             // Longest chain rule applied (resolving fork)
