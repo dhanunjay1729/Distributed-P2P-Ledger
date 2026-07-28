@@ -1,8 +1,12 @@
 // State
-const NUM_NODES = 5;
+const NUM_NODES = 6; // Increased to 6 nodes
 const nodes = [];
-let txCounter = 1;
-let blockCounter = 1;
+
+// Timings (Slowed down for readability)
+const PACKET_SPEED = 2000; // Time it takes a packet to travel
+const GOSSIP_DELAY = 1200; // Delay before gossiping to next peer
+const MINING_TIME_MIN = 6000; 
+const MINING_TIME_MAX = 12000;
 
 // DOM Elements
 const nodesContainer = document.getElementById('nodes-container');
@@ -21,6 +25,7 @@ class Node {
         this.chain = [{ index: 0, hash: '0000genesis' }];
         this.isMining = false;
         this.miningInterval = null;
+        this.tooltipTimeout = null;
         
         this.render();
     }
@@ -31,6 +36,11 @@ class Node {
         this.el.style.left = `${this.x}px`;
         this.el.style.top = `${this.y}px`;
         
+        // Add tooltip element
+        this.tooltipEl = document.createElement('div');
+        this.tooltipEl.className = 'node-tooltip';
+        this.el.appendChild(this.tooltipEl);
+
         this.updateUI();
         nodesContainer.appendChild(this.el);
     }
@@ -44,21 +54,29 @@ class Node {
             </div>`
         ).join('');
 
-        this.el.innerHTML = `
-            <div class="node-header">
-                <span class="node-title">${this.name}</span>
-                <span class="node-status">${this.isMining ? 'Mining...' : 'Idle'}</span>
-            </div>
-            <div class="mining-indicator"><div class="mining-progress"></div></div>
-            <div class="node-section">
-                <h4>Mempool</h4>
-                <div class="mempool-list">${mempoolHTML}</div>
-            </div>
-            <div class="node-section">
-                <h4>Blockchain</h4>
-                <div class="chain-list">${chainHTML}</div>
-            </div>
-        `;
+        // We update the innerHTML of specific sections to not destroy the tooltip
+        let header = this.el.querySelector('.node-header');
+        if (!header) {
+            this.el.insertAdjacentHTML('afterbegin', `
+                <div class="node-header">
+                    <span class="node-title">${this.name}</span>
+                    <span class="node-status">${this.isMining ? 'Mining...' : 'Idle'}</span>
+                </div>
+                <div class="mining-indicator"><div class="mining-progress"></div></div>
+                <div class="node-section">
+                    <h4>Mempool (Waiting Room)</h4>
+                    <div class="mempool-list"></div>
+                </div>
+                <div class="node-section">
+                    <h4>Blockchain (Permanent)</h4>
+                    <div class="chain-list"></div>
+                </div>
+            `);
+        } else {
+            this.el.querySelector('.node-status').textContent = this.isMining ? 'Mining...' : 'Idle';
+            this.el.querySelector('.mempool-list').innerHTML = mempoolHTML;
+            this.el.querySelector('.chain-list').innerHTML = chainHTML;
+        }
 
         if (this.isMining) {
             this.el.classList.add('mining');
@@ -67,27 +85,39 @@ class Node {
         }
     }
 
+    showTooltip(message, duration = 3000, colorClass = '') {
+        this.tooltipEl.textContent = message;
+        this.tooltipEl.className = `node-tooltip show ${colorClass}`;
+        
+        clearTimeout(this.tooltipTimeout);
+        this.tooltipTimeout = setTimeout(() => {
+            this.tooltipEl.classList.remove('show');
+        }, duration);
+    }
+
     receiveTx(tx) {
         if (!this.mempool.includes(tx) && !this.txInChain(tx)) {
             this.mempool.push(tx);
             this.updateUI();
-            this.startMining();
+            this.showTooltip("1. Received TX. Adding to Mempool.", 2500, 'tooltip-purple');
             
-            // Gossip to neighbors
+            // Start mining if we aren't already
+            setTimeout(() => this.startMining(), 1500);
+            
+            // Gossip to neighbors (Slowed down for visibility)
             setTimeout(() => {
+                this.showTooltip("Gossiping TX to peers...", 2000, 'tooltip-purple');
                 const targets = getNeighbors(this.id);
                 targets.forEach(targetId => {
                     animatePacket(this.id, targetId, 'tx', () => {
                         nodes[targetId].receiveTx(tx);
                     });
                 });
-            }, 300);
+            }, GOSSIP_DELAY);
         }
     }
 
     txInChain(tx) {
-        // Simplified check: we just assume if chain > 1 it might be there.
-        // In this simulation, we'll just rely on mempool clearing
         return false; 
     }
 
@@ -95,13 +125,14 @@ class Node {
         if (this.isMining || this.mempool.length === 0) return;
         this.isMining = true;
         this.updateUI();
+        
+        this.showTooltip("2. Grinding CPU to solve Block (PoW)...", 4000, 'tooltip-blue');
 
-        // Random mining time between 3s and 8s
-        const mineTime = Math.random() * 5000 + 3000;
+        // Random mining time
+        const mineTime = Math.random() * (MINING_TIME_MAX - MINING_TIME_MIN) + MINING_TIME_MIN;
         
         this.miningInterval = setTimeout(() => {
             if (!this.isMining) return; // aborted
-            
             this.mineBlock();
         }, mineTime);
     }
@@ -122,15 +153,15 @@ class Node {
         };
 
         logActivity(`⛏️ ${this.name} successfully mined Block #${block.index}`, 'log-mine');
+        this.showTooltip("3. Block Solved! Sending to network.", 4000, 'tooltip-green');
         
         this.el.classList.add('success');
-        setTimeout(() => this.el.classList.remove('success'), 1000);
+        setTimeout(() => this.el.classList.remove('success'), 1500);
 
         this.receiveBlock(block, this.name);
     }
 
     receiveBlock(block, sourceName) {
-        // Check if we already have this block index (conflict) or if it's new
         const currentHeight = this.chain.length - 1;
         
         if (block.index > currentHeight) {
@@ -139,15 +170,19 @@ class Node {
             
             // Clear mempool of mined txs
             this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
-            this.stopMining(); // Stop mining current batch
+            this.stopMining(); // Stop mining current batch because block is solved
             this.updateUI();
+
+            if (sourceName !== this.name) {
+                this.showTooltip(`4. Validated Block #${block.index}. Saved to chain!`, 3500, 'tooltip-green');
+            }
 
             // If we have remaining txs, restart mining
             if (this.mempool.length > 0) {
-                this.startMining();
+                setTimeout(() => this.startMining(), 2000);
             }
 
-            // Gossip block
+            // Gossip block to peers
             setTimeout(() => {
                 const targets = getNeighbors(this.id);
                 targets.forEach(targetId => {
@@ -155,16 +190,17 @@ class Node {
                         nodes[targetId].receiveBlock(block, this.name);
                     });
                 });
-            }, 400);
+            }, GOSSIP_DELAY);
             
         } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
             // FORK DETECTED!
             logActivity(`⚠️ ${this.name} detected a fork at Block #${block.index}.`, 'log-fork');
-            // In a real network, we wait for the longest chain. 
-            // In this sim, we'll let the "Simulate Fork" button handle the resolution natively.
+            this.showTooltip("Fork detected! Waiting for Longest Chain...", 5000, 'tooltip-red');
         } else if (block.index > currentHeight + 1) {
             // Longest chain rule applied (resolving fork)
             logActivity(`⚖️ ${this.name} applying Longest Chain Rule. Syncing...`, 'log-gossip');
+            this.showTooltip("Longest Chain won! Discarding old chain.", 5000, 'tooltip-green');
+            
             this.chain = block.fullChainSnapshot; // Cheat for simulation
             this.mempool = [];
             this.stopMining();
@@ -200,9 +236,11 @@ function initNetwork() {
 
 // Helpers
 function getNeighbors(nodeId) {
-    // In this sim, everyone is connected to everyone else, but we'll gossip to 2 random peers to simulate fanout
-    const others = [0, 1, 2, 3, 4].filter(id => id !== nodeId);
-    // Shuffle and pick 2
+    // Pick 2 random peers to gossip to
+    const others = [];
+    for (let i=0; i<NUM_NODES; i++) {
+        if (i !== nodeId) others.push(i);
+    }
     return others.sort(() => 0.5 - Math.random()).slice(0, 2);
 }
 
@@ -221,7 +259,7 @@ function animatePacket(fromId, toId, type, onComplete) {
         { left: `${start.x}px`, top: `${start.y}px` },
         { left: `${end.x}px`, top: `${end.y}px` }
     ], {
-        duration: 800,
+        duration: PACKET_SPEED, // Slower travel time
         easing: 'ease-in-out'
     });
 
@@ -252,36 +290,33 @@ document.getElementById('send-tx-btn').addEventListener('click', () => {
 document.getElementById('trigger-fork-btn').addEventListener('click', () => {
     logActivity(`🚨 Simulating network fork...`, 'log-fork');
     
-    // Force Node A and Node C to mine blocks at the exact same time
     const nodeA = nodes[0];
     const nodeC = nodes[2];
     
-    // Give them a dummy tx if empty
     if (nodeA.mempool.length === 0) nodeA.mempool.push('tx_fork1');
     if (nodeC.mempool.length === 0) nodeC.mempool.push('tx_fork2');
 
-    // Force mine
     nodeA.mineBlock();
     nodeC.mineBlock();
 
     setTimeout(() => {
         logActivity(`⚔️ Network is split! Wait for next block to resolve...`, 'log-fork');
         
-        // Force Node A to mine the NEXT block quickly to win the longest chain
+        // Force Node A to mine the NEXT block to win the longest chain
         setTimeout(() => {
             logActivity(`👑 Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain...`, 'log-mine');
             const winnerBlock = {
                 index: nodeA.chain.length,
                 hash: '0000winner',
                 txs: [],
-                fullChainSnapshot: JSON.parse(JSON.stringify(nodeA.chain)) // Inject full chain for sim
+                fullChainSnapshot: JSON.parse(JSON.stringify(nodeA.chain))
             };
             winnerBlock.fullChainSnapshot.push({ index: winnerBlock.index, hash: winnerBlock.hash });
             
             nodeA.receiveBlock(winnerBlock, nodeA.name);
-        }, 2000);
+        }, 5000); // Wait 5 seconds so user can read the fork tooltips
         
-    }, 1500);
+    }, 2500);
 });
 
 // Start

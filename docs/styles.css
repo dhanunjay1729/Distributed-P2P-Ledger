@@ -346,3 +346,53 @@ button {
     background-color: var(--accent-green);
     box-shadow: 0 0 15px var(--accent-green);
 }
+
+/* Explanatory Tooltips */
+.node-tooltip {
+    position: absolute;
+    top: -55px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-glass);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: white;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+}
+
+.node-tooltip.show {
+    opacity: 1;
+    transform: translate(-50%, -10px);
+}
+
+.node-tooltip::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 6px 6px 0;
+    border-style: solid;
+    border-color: var(--border-glass) transparent transparent transparent;
+}
+
+/* Tooltip Colors based on context */
+.tooltip-purple { border-color: var(--accent-purple); box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4); }
+.tooltip-purple::after { border-color: var(--accent-purple) transparent transparent transparent; }
+
+.tooltip-blue { border-color: var(--accent-blue); box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4); }
+.tooltip-blue::after { border-color: var(--accent-blue) transparent transparent transparent; }
+
+.tooltip-green { border-color: var(--accent-green); box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4); }
+.tooltip-green::after { border-color: var(--accent-green) transparent transparent transparent; }
+
+.tooltip-red { border-color: var(--accent-red); box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4); }
+.tooltip-red::after { border-color: var(--accent-red) transparent transparent transparent; }
