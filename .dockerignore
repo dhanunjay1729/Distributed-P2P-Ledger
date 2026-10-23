@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+.aws
+data
+bin
+node_a/*.json
+internal/**/*.json
+*.log
+
+__pycache__

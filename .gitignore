@@ -1,13 +1,13 @@
-# Environment variables
+# Local state and executables
 .env
-
-# Node binary / executables
-Node -A/Node.go
-
-# Internal test JSON files
-/internal/api/*.json
-/internal/storage/*.json
-
-# Optional: OS or editor files
+/bin/
+/data/
+/node_a/chain_*.json
+**/test_chain.json
+**/test_api_chain.json
+*.log
 *.swp
-*.DS_Store.understand-anything/
+.DS_Store
+coverage.out
+
+__pycache__/
