@@ -1,0 +1,98 @@
+{
+  "captured": "23 Oct 2026, 15:50 IST",
+  "commands": [
+    "$ docker compose -p ledger-readme up --no-build -d --wait\nNetwork ledger-readme_default Creating \n Network ledger-readme_default Created \n Volume ledger-readme_node2_data Creating \n Volume ledger-readme_node2_data Created \n Volume ledger-readme_node3_data Creating \n Volume ledger-readme_node3_data Created \n Volume ledger-readme_node4_data Creating \n Volume ledger-readme_node4_data Created \n Volume ledger-readme_node5_data Creating \n Volume ledger-readme_node5_data Created \n Volume ledger-readme_node6_data Creating \n Volume ledger-readme_node6_data Created \n Volume ledger-readme_node1_data Creating \n Volume ledger-readme_node1_data Created \n Container ledger-readme-node2-1 Creating \n Container ledger-readme-node6-1 Creating \n Container ledger-readme-node5-1 Creating \n Container ledger-readme-node3-1 Creating \n Container ledger-readme-node4-1 Creating \n Container ledger-readme-node1-1 Creating \n Container ledger-readme-node3-1 Created \n Container ledger-readme-node2-1 Created \n Container ledger-readme-node5-1 Created \n Container ledger-readme-node1-1 Created \n Container ledger-readme-node4-1 Created \n Container ledger-readme-node6-1 Created \n Container ledger-readme-node4-1 Starting \n Container ledger-readme-node1-1 Starting \n Container ledger-readme-node3-1 Starting \n Container ledger-readme-node5-1 Starting \n Container ledger-readme-node6-1 Starting \n Container ledger-readme-node2-1 Starting \n Container ledger-readme-node5-1 Started \n Container ledger-readme-node3-1 Started \n Container ledger-readme-node2-1 Started \n Container ledger-readme-node1-1 Started \n Container ledger-readme-node6-1 Started \n Container ledger-readme-node4-1 Started \n Container ledger-readme-node4-1 Waiting \n Container ledger-readme-node5-1 Waiting \n Container ledger-readme-node6-1 Waiting \n Container ledger-readme-node1-1 Waiting \n Container ledger-readme-node2-1 Waiting \n Container ledger-readme-node3-1 Waiting \n Container ledger-readme-node5-1 Healthy \n Container ledger-readme-node1-1 Healthy \n Container ledger-readme-node2-1 Healthy \n Container ledger-readme-node3-1 Healthy \n Container ledger-readme-node6-1 Healthy \n Container ledger-readme-node4-1 Healthy",
+    "$ docker compose -p ledger-readme stop node6\nContainer ledger-readme-node6-1 Stopping \n Container ledger-readme-node6-1 Stopped",
+    "$ docker compose -p ledger-readme start node6\nContainer ledger-readme-node6-1 Starting \n Container ledger-readme-node6-1 Started",
+    "$ docker ps --filter label=com.docker.compose.project=ledger-readme --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'\nNAMES                   STATUS                    PORTS\nledger-readme-node4-1   Up 12 seconds (healthy)   127.0.0.1:8084->8080/tcp\nledger-readme-node6-1   Up 5 seconds (healthy)    127.0.0.1:8086->8080/tcp\nledger-readme-node2-1   Up 12 seconds (healthy)   127.0.0.1:8082->8080/tcp\nledger-readme-node1-1   Up 12 seconds (healthy)   127.0.0.1:8081->8080/tcp\nledger-readme-node5-1   Up 12 seconds (healthy)   127.0.0.1:8085->8080/tcp\nledger-readme-node3-1   Up 12 seconds (healthy)   127.0.0.1:8083->8080/tcp"
+  ],
+  "transaction": {
+    "id": "readme-demo",
+    "data": "Hello from Node 1",
+    "timestamp": 1792750813
+  },
+  "accepted": [
+    202,
+    {
+      "id": "readme-demo",
+      "status": "pending"
+    }
+  ],
+  "confirmed_on_node3": [
+    200,
+    {
+      "block_index": 1,
+      "confirmations": 1,
+      "status": "confirmed",
+      "transaction": {
+        "id": "readme-demo",
+        "data": "Hello from Node 1",
+        "timestamp": 1792750813
+      }
+    }
+  ],
+  "duplicate": [
+    409,
+    {
+      "error": "transaction already known"
+    }
+  ],
+  "node6_before": {
+    "difficulty": 2,
+    "hash": "5468d8e8677378cb867c1216274e3c3c245226365298b1129f30d8ecd149c82f",
+    "height": 0,
+    "pending": 0,
+    "version": 1
+  },
+  "node6_after": {
+    "difficulty": 2,
+    "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+    "height": 1,
+    "pending": 0,
+    "version": 1
+  },
+  "all_nodes": [
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    },
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    },
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    },
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    },
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    },
+    {
+      "difficulty": 2,
+      "hash": "008a50ebe18e62ee078c69c67f982176551b33481c61beb7310e4aa8e34575e9",
+      "height": 1,
+      "pending": 0,
+      "version": 1
+    }
+  ]
+}
