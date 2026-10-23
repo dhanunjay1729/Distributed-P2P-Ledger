@@ -1,91 +1,139 @@
-/*
-Package models defines the core data structures for the P2P blockchain ledger.
-
-Block represents a single block in the blockchain. Each block contains:
-  - Index: the block's position in the chain (0 for genesis, 1, 2, 3...)
-  - Timestamp: Unix timestamp of when the block was mined
-  - Transactions: the batch of transactions packed into this block
-  - PrevHash: the SHA-256 hash of the previous block (creates the "chain")
-  - Hash: this block's own SHA-256 hash (its unique fingerprint)
-  - Nonce: the number that was guessed during Proof of Work mining
-
-The CalculateHash method produces a deterministic SHA-256 fingerprint of the
-block's contents. If even a single character in any field changes, the hash
-changes completely, making tampering immediately detectable.
-
-CreateGenesisBlock produces the very first block in the chain (Block #0).
-It has no previous hash and contains no transactions.
-*/
+// Package models defines the versioned rules shared by every node.
 package models
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
 
-// Block represents a single block in the blockchain.
+const (
+	ProtocolVersion      = 1
+	DefaultDifficulty    = 2
+	MaxDifficulty        = 4
+	MaxBlockTransactions = 100
+	MaxChainBlocks       = 10000
+)
+
 type Block struct {
-	Index        int           `json:"index"`         // Position in the chain (0, 1, 2, ...)
-	Timestamp    int64         `json:"timestamp"`     // Unix timestamp of when this block was mined
-	Transactions []Transaction `json:"transactions"`  // Batch of transactions packed into this block
-	PrevHash     string        `json:"prev_hash"`     // SHA-256 hash of the previous block
-	Hash         string        `json:"hash"`          // This block's own SHA-256 hash
-	Nonce        int           `json:"nonce"`         // The number guessed during Proof of Work
+	Version      int           `json:"version"`
+	Difficulty   int           `json:"difficulty"`
+	Index        int           `json:"index"`
+	Timestamp    int64         `json:"timestamp"`
+	Transactions []Transaction `json:"transactions"`
+	PrevHash     string        `json:"prev_hash"`
+	Hash         string        `json:"hash"`
+	Nonce        uint64        `json:"nonce"`
 }
 
-// CalculateHash computes the SHA-256 hash of the block's contents.
-//
-// It concatenates: Index + Timestamp + all transaction IDs + PrevHash + Nonce
-// into a single string, then runs SHA-256 on it.
-//
-// Why include transaction IDs? If someone swaps out a transaction inside the
-// block, the hash will change, and the chain breaks.
-//
-// Why include PrevHash? It chains this block to the previous one. Changing
-// any older block would cascade hash mismatches forward through every
-// subsequent block.
-func (b *Block) CalculateHash() string {
-	// Collect all transaction IDs into a single string for hashing.
-	txIDs := make([]string, len(b.Transactions))
-	for i, tx := range b.Transactions {
-		txIDs[i] = tx.ID
-	}
-
-	// Build the raw string that will be hashed.
-	record := fmt.Sprintf("%d%d%s%s%d",
-		b.Index,
-		b.Timestamp,
-		strings.Join(txIDs, ","),
-		b.PrevHash,
-		b.Nonce,
-	)
-
-	// Compute SHA-256 hash and return as a hex string.
-	hash := sha256.Sum256([]byte(record))
+// JSON boundaries prevent ambiguities such as ["a,b"] versus ["a","b"].
+// Every transaction field is protected, not just the transaction ID.
+func (b Block) CalculateHash() string {
+	header := struct {
+		Version      int           `json:"version"`
+		Difficulty   int           `json:"difficulty"`
+		Index        int           `json:"index"`
+		Timestamp    int64         `json:"timestamp"`
+		Transactions []Transaction `json:"transactions"`
+		PrevHash     string        `json:"prev_hash"`
+		Nonce        uint64        `json:"nonce"`
+	}{b.Version, b.Difficulty, b.Index, b.Timestamp, b.Transactions, b.PrevHash, b.Nonce}
+	raw, _ := json.Marshal(header)
+	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:])
 }
 
-// CreateGenesisBlock creates the very first block in the blockchain (Block #0).
-//
-// The genesis block is special:
-//   - Index is 0
-//   - PrevHash is empty (there is no block before it)
-//   - It contains no transactions
-//   - Nonce is 0 (no mining required for genesis)
-//
-// Every node in the network must start with the exact same genesis block,
-// otherwise their chains will never match.
-func CreateGenesisBlock() Block {
-	genesis := Block{
-		Index:        0,
-		Timestamp:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix(),
-		Transactions: []Transaction{},
-		PrevHash:     "",
-		Nonce:        0,
+func CheckDifficulty(d int) error {
+	if d < 1 || d > MaxDifficulty {
+		return fmt.Errorf("difficulty must be between 1 and %d", MaxDifficulty)
 	}
-	genesis.Hash = genesis.CalculateHash()
-	return genesis
+	return nil
+}
+
+func CreateGenesisBlock(ds ...int) Block {
+	d := DefaultDifficulty
+	if len(ds) > 0 {
+		d = ds[0]
+	}
+	b := Block{Version: ProtocolVersion, Difficulty: d, Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix(), Transactions: []Transaction{}}
+	b.Hash = b.CalculateHash()
+	return b
+}
+
+// ValidateBlock also works when a block's parent has not arrived yet.
+func ValidateBlock(b Block, d int) error {
+	if err := CheckDifficulty(d); err != nil {
+		return err
+	}
+	if b.Version != ProtocolVersion || b.Difficulty != d {
+		return fmt.Errorf("incompatible protocol version or difficulty")
+	}
+	if b.Index < 1 || b.Index >= MaxChainBlocks || len(b.PrevHash) != 64 {
+		return fmt.Errorf("invalid block index or previous hash")
+	}
+	if b.Timestamp < CreateGenesisBlock(d).Timestamp || b.Timestamp > time.Now().Add(2*time.Minute).Unix() {
+		return fmt.Errorf("invalid block timestamp")
+	}
+	if len(b.Transactions) == 0 || len(b.Transactions) > MaxBlockTransactions {
+		return fmt.Errorf("block must contain 1 to %d transactions", MaxBlockTransactions)
+	}
+	seen := make(map[string]bool, len(b.Transactions))
+	for _, tx := range b.Transactions {
+		if err := ValidateTransaction(tx); err != nil {
+			return err
+		}
+		if seen[tx.ID] {
+			return fmt.Errorf("duplicate transaction %q in block", tx.ID)
+		}
+		seen[tx.ID] = true
+	}
+	if len(b.Hash) != 64 || b.Hash != b.CalculateHash() {
+		return fmt.Errorf("invalid block hash")
+	}
+	if !strings.HasPrefix(b.Hash, strings.Repeat("0", d)) {
+		return fmt.Errorf("block does not meet proof of work")
+	}
+	return nil
+}
+
+func ValidateChain(chain []Block, d int) error {
+	if err := CheckDifficulty(d); err != nil {
+		return err
+	}
+	if len(chain) == 0 || len(chain) > MaxChainBlocks {
+		return fmt.Errorf("invalid chain length")
+	}
+	if !reflect.DeepEqual(chain[0], CreateGenesisBlock(d)) {
+		return fmt.Errorf("invalid genesis block; legacy chains require a fresh data directory")
+	}
+	seen := make(map[string]bool)
+	for i := 1; i < len(chain); i++ {
+		b, prev := chain[i], chain[i-1]
+		if err := ValidateBlock(b, d); err != nil {
+			return fmt.Errorf("block %d: %w", i, err)
+		}
+		if b.Index != i || b.PrevHash != prev.Hash || b.Timestamp < prev.Timestamp {
+			return fmt.Errorf("block %d does not follow its parent", i)
+		}
+		for _, tx := range b.Transactions {
+			if seen[tx.ID] {
+				return fmt.Errorf("transaction %q appears more than once", tx.ID)
+			}
+			seen[tx.ID] = true
+		}
+	}
+	return nil
+}
+
+// Length represents work because every block has the same configured target.
+// The smaller tip hash breaks equal-length ties so idle forks also converge.
+func BetterChain(candidate, current []Block) bool {
+	if len(candidate) != len(current) {
+		return len(candidate) > len(current)
+	}
+	return len(candidate) > 0 && candidate[len(candidate)-1].Hash < current[len(current)-1].Hash
 }

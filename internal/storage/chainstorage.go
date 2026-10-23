@@ -1,221 +1,214 @@
-/*
-Package storage implements the persistence layer for the P2P ledger.
-
-This file provides the ChainStorage interface and a file-based implementation
-(FileChainStorage) to store a sequence of blocks (the blockchain).
-
-It differs from the legacy FileStorage in that it saves a chain of Blocks
-rather than a flat list of Transactions, and includes logic to validate
-the cryptographic integrity of the chain upon loading.
-*/
+// Package storage validates and atomically persists confirmed blocks.
 package storage
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"p2pledger/internal/models"
+	"path/filepath"
 	"sync"
 )
 
-// ChainStorage defines the interface for interacting with the blockchain.
+const MaxChainBytes = 64 << 20
+
+var (
+	ErrNotBetter  = errors.New("candidate chain is not preferred over the current chain")
+	ErrStaleBlock = errors.New("block does not extend the current tip")
+)
+
 type ChainStorage interface {
-	AddBlock(block models.Block) error
+	AddBlock(models.Block) error
 	GetChain() ([]models.Block, error)
 	GetLatestBlock() (models.Block, error)
-	ReplaceChain(newChain []models.Block) error
-	TransactionExists(txID string) (bool, error)
+	ReplaceChain([]models.Block) error
+	TransactionExists(string) (bool, error)
+	Difficulty() int
 }
 
-// FileChainStorage implements ChainStorage using a local JSON file.
 type FileChainStorage struct {
-	FilePath string
-	mu       sync.RWMutex
+	FilePath   string
+	mu         sync.RWMutex
+	chain      []models.Block
+	txIDs      map[string]bool
+	difficulty int
 }
 
-// NewFileChainStorage creates a new FileChainStorage instance.
-// If the file doesn't exist or is empty, it automatically initializes it
-// with the Genesis Block.
-func NewFileChainStorage(path string) (*FileChainStorage, error) {
-	fs := &FileChainStorage{FilePath: path}
-	
-	// Check if file exists; if not, initialize with Genesis block
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		genesis := []models.Block{models.CreateGenesisBlock()}
-		if err := fs.ReplaceChain(genesis); err != nil {
-			return nil, fmt.Errorf("failed to initialize genesis block: %w", err)
+func NewFileChainStorage(path string, ds ...int) (*FileChainStorage, error) {
+	d := models.DefaultDifficulty
+	if len(ds) > 0 {
+		d = ds[0]
+	}
+	if err := models.CheckDifficulty(d); err != nil {
+		return nil, err
+	}
+	fs := &FileChainStorage{FilePath: path, difficulty: d}
+	info, err := os.Stat(path)
+	if err == nil && (info.Size() == 0 || info.Size() > MaxChainBytes) {
+		return nil, fmt.Errorf("invalid chain file size; original file preserved")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		fs.chain = []models.Block{models.CreateGenesisBlock(d)}
+		if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+			return nil, err
+		}
+		if err := fs.saveUnlocked(fs.chain); err != nil {
+			return nil, err
+		}
+	} else {
+		if err != nil {
+			return nil, err
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&fs.chain); err != nil {
+			return nil, fmt.Errorf("load chain: %w", err)
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return nil, fmt.Errorf("unexpected trailing chain data")
+		}
+		if err := models.ValidateChain(fs.chain, d); err != nil {
+			return nil, fmt.Errorf("load chain: %w", err)
 		}
 	}
-	
-	// Ensure the chain is valid upon startup
-	chain, err := fs.GetChain()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chain: %w", err)
-	}
-	if len(chain) == 0 {
-		genesis := []models.Block{models.CreateGenesisBlock()}
-		if err := fs.ReplaceChain(genesis); err != nil {
-			return nil, fmt.Errorf("failed to re-initialize genesis block: %w", err)
-		}
-	}
-	
+	fs.indexTransactions()
 	return fs, nil
 }
 
-// GetChain reads the full blockchain from the JSON file.
+func (fs *FileChainStorage) Difficulty() int { return fs.difficulty }
+
+func cloneChain(chain []models.Block) []models.Block {
+	out := make([]models.Block, len(chain))
+	copy(out, chain)
+	for i := range out {
+		out[i].Transactions = append([]models.Transaction{}, chain[i].Transactions...)
+	}
+	return out
+}
+
 func (fs *FileChainStorage) GetChain() ([]models.Block, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
-
-	jsonFile, err := os.Open(fs.FilePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []models.Block{}, nil
-		}
-		return nil, err
-	}
-	defer jsonFile.Close()
-
-	byteValue, err := ioutil.ReadAll(jsonFile)
-	if err != nil {
-		return nil, err
-	}
-	
-	if len(byteValue) == 0 {
-		return []models.Block{}, nil
-	}
-
-	var chain []models.Block
-	err = json.Unmarshal(byteValue, &chain)
-	if err != nil {
-		return nil, err
-	}
-
-	return chain, nil
+	return cloneChain(fs.chain), nil
 }
 
-// AddBlock appends a new block to the chain.
-// It verifies that the block correctly links to the current latest block.
-func (fs *FileChainStorage) AddBlock(block models.Block) error {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+func (fs *FileChainStorage) GetLatestBlock() (models.Block, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	b := fs.chain[len(fs.chain)-1]
+	b.Transactions = append([]models.Transaction{}, b.Transactions...)
+	return b, nil
+}
 
-	// Need to load without lock since we hold it
-	chain, err := fs.loadUnlocked()
-	if err != nil {
+func (fs *FileChainStorage) AddBlock(b models.Block) error {
+	if err := models.ValidateBlock(b, fs.difficulty); err != nil {
 		return err
 	}
-
-	if len(chain) > 0 {
-		latest := chain[len(chain)-1]
-		if block.PrevHash != latest.Hash {
-			return fmt.Errorf("invalid block: PrevHash does not match latest block Hash")
-		}
-		if block.Index != latest.Index+1 {
-			return fmt.Errorf("invalid block: Index must be exactly 1 greater than latest block")
-		}
-	}
-
-	chain = append(chain, block)
-	return fs.saveUnlocked(chain)
-}
-
-// GetLatestBlock returns the most recent block in the chain.
-func (fs *FileChainStorage) GetLatestBlock() (models.Block, error) {
-	chain, err := fs.GetChain()
-	if err != nil {
-		return models.Block{}, err
-	}
-	if len(chain) == 0 {
-		return models.Block{}, fmt.Errorf("chain is empty")
-	}
-	return chain[len(chain)-1], nil
-}
-
-// ReplaceChain overwrites the entire local chain with a new one.
-// This is used during fork resolution (Longest Chain Rule).
-func (fs *FileChainStorage) ReplaceChain(newChain []models.Block) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	return fs.saveUnlocked(newChain)
+	prev := fs.chain[len(fs.chain)-1]
+	if b.Index != prev.Index+1 || b.PrevHash != prev.Hash {
+		return ErrStaleBlock
+	}
+	if b.Timestamp < prev.Timestamp {
+		return fmt.Errorf("block timestamp precedes parent")
+	}
+	for _, tx := range b.Transactions {
+		if fs.txIDs[tx.ID] {
+			return fmt.Errorf("transaction %q already confirmed", tx.ID)
+		}
+	}
+	candidate := append(cloneChain(fs.chain), b)
+	if err := fs.saveUnlocked(candidate); err != nil {
+		return err
+	}
+	fs.chain = cloneChain(candidate)
+	for _, tx := range b.Transactions {
+		fs.txIDs[tx.ID] = true
+	}
+	return nil
 }
 
-// TransactionExists checks if a transaction is already permanently recorded in any block.
-func (fs *FileChainStorage) TransactionExists(txID string) (bool, error) {
-	chain, err := fs.GetChain()
-	if err != nil {
-		return false, err
+// Compare against the LIVE chain while holding the same lock as the replacement.
+func (fs *FileChainStorage) ReplaceChain(chain []models.Block) error {
+	candidate := cloneChain(chain)
+	if err := models.ValidateChain(candidate, fs.difficulty); err != nil {
+		return err
 	}
-	
-	// Start from latest blocks as they are more likely to contain recent transactions
-	for i := len(chain) - 1; i >= 0; i-- {
-		for _, tx := range chain[i].Transactions {
-			if tx.ID == txID {
-				return true, nil
-			}
-		}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if !models.BetterChain(candidate, fs.chain) {
+		return ErrNotBetter
 	}
-	return false, nil
+	if err := fs.saveUnlocked(candidate); err != nil {
+		return err
+	}
+	fs.chain = candidate
+	fs.indexTransactions()
+	return nil
 }
 
-// ValidateChain is a utility function to verify cryptographic integrity.
-func ValidateChain(chain []models.Block) bool {
-	if len(chain) == 0 {
-		return false
-	}
-	
-	// Ensure genesis is correct
-	expectedGenesis := models.CreateGenesisBlock()
-	if chain[0].Hash != expectedGenesis.Hash {
-		return false
-	}
-
-	// Verify each subsequent block
-	for i := 1; i < len(chain); i++ {
-		currentBlock := chain[i]
-		previousBlock := chain[i-1]
-
-		// Does it point to the correct previous hash?
-		if currentBlock.PrevHash != previousBlock.Hash {
-			return false
-		}
-		
-		// Is the hash itself mathematically valid?
-		if currentBlock.Hash != currentBlock.CalculateHash() {
-			return false
-		}
-		
-		// Is the index correct?
-		if currentBlock.Index != previousBlock.Index+1 {
-			return false
-		}
-	}
-	return true
+func (fs *FileChainStorage) TransactionExists(id string) (bool, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	return fs.txIDs[id], nil
 }
 
-// Internal un-exported helpers to avoid deadlocks when a method
-// already holds the lock.
-func (fs *FileChainStorage) loadUnlocked() ([]models.Block, error) {
-	byteValue, err := ioutil.ReadFile(fs.FilePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []models.Block{}, nil
+func (fs *FileChainStorage) indexTransactions() {
+	fs.txIDs = make(map[string]bool)
+	for _, b := range fs.chain {
+		for _, tx := range b.Transactions {
+			fs.txIDs[tx.ID] = true
 		}
-		return nil, err
 	}
-	if len(byteValue) == 0 {
-		return []models.Block{}, nil
+}
+
+func ValidateChain(chain []models.Block, ds ...int) bool {
+	d := models.DefaultDifficulty
+	if len(ds) > 0 {
+		d = ds[0]
 	}
-	var chain []models.Block
-	err = json.Unmarshal(byteValue, &chain)
-	return chain, err
+	return models.ValidateChain(chain, d) == nil
 }
 
 func (fs *FileChainStorage) saveUnlocked(chain []models.Block) error {
-	byteValue, err := json.MarshalIndent(chain, "", "  ")
+	raw, err := json.Marshal(chain)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(fs.FilePath, byteValue, 0644)
+	if len(raw) > MaxChainBytes {
+		return fmt.Errorf("chain exceeds %d bytes", MaxChainBytes)
+	}
+	f, err := os.CreateTemp(filepath.Dir(fs.FilePath), ".chain-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(raw); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(f.Name(), fs.FilePath); err != nil {
+		return err
+	}
+	// Once renamed, the commit succeeded. Directory sync improves crash durability.
+	if dir, err := os.Open(filepath.Dir(fs.FilePath)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }

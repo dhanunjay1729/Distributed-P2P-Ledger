@@ -1,0 +1,28 @@
+[
+  {
+    "version": 1,
+    "difficulty": 2,
+    "index": 0,
+    "timestamp": 1767225600,
+    "transactions": [],
+    "prev_hash": "",
+    "nonce": 0,
+    "hash": "5468d8e8677378cb867c1216274e3c3c245226365298b1129f30d8ecd149c82f"
+  },
+  {
+    "version": 1,
+    "difficulty": 2,
+    "index": 1,
+    "timestamp": 1767225600,
+    "transactions": [
+      {
+        "id": "fixture",
+        "data": "All fields: <>& café  ",
+        "timestamp": 1
+      }
+    ],
+    "prev_hash": "5468d8e8677378cb867c1216274e3c3c245226365298b1129f30d8ecd149c82f",
+    "nonce": 243,
+    "hash": "00ca1906d6ca19714620136758b974298b98de1892882f755ad88bc96cc81dbc"
+  }
+]
