@@ -454,3 +454,22 @@ button {
 .node-tooltip.tooltip-bottom.tooltip-green::after { border-color: transparent transparent var(--accent-green) transparent; }
 .node-tooltip.tooltip-bottom.tooltip-red::after { border-color: transparent transparent var(--accent-red) transparent; }
 
+
+/* The learning demo stays usable on smaller screens. */
+.simulation-note { margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+button:disabled { opacity: .5; cursor: wait; transform: none; }
+button:focus-visible { outline: 2px solid var(--text-main); outline-offset: 3px; }
+.node-tooltip { white-space: normal; width: 210px; text-align: center; }
+.network-canvas { overflow: auto; min-width: 0; }
+#packets-container { position: absolute; inset: 0; pointer-events: none; }
+.compact #connections-svg { display: none; }
+@media (max-width: 800px) {
+ body { overflow: auto; height: auto; }
+ .app-container { flex-direction: column; height: auto; min-height: 100vh; }
+ .sidebar { width: 100%; min-width: 0; }
+ .log-container { max-height: 180px; }
+ .network-canvas { flex: none; width: 100%; min-height: 720px; }
+}
+@media (prefers-reduced-motion: reduce) {
+ *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

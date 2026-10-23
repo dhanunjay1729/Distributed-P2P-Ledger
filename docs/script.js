@@ -1,390 +1,281 @@
-// State
-const NUM_NODES = 6;
+/* Browser-only animation. Hashing/validation live in simulator-core.js. */
+'use strict';
+const Sim = globalThis.LedgerSim;
+const NUM_NODES = 6, GOSSIP_DELAY = 500, PACKET_SPEED = 900;
 const nodes = [];
-let lastMinedTx = null; // Track last mined TX for double-spend demo
-
-// Timings
-const PACKET_SPEED = 1800;
-const GOSSIP_DELAY = 800;
-const MINING_TIME_MIN = 8000;
-const MINING_TIME_MAX = 25000;
-
-// DOM Elements
+let lastMinedTx = null, forkInProgress = false, syncTimer = null;
 const nodesContainer = document.getElementById('nodes-container');
 const svgContainer = document.getElementById('connections-svg');
 const packetsContainer = document.getElementById('packets-container');
 const activityLog = document.getElementById('activity-log');
+const buttons = Array.from(document.querySelectorAll('.controls button'));
 
-// Node class
 class Node {
-    constructor(id, x, y, canvasHeight) {
+    constructor(id, genesis) {
         this.id = id;
-        this.name = `Node ${String.fromCharCode(65 + id)}`;
-        this.x = x;
-        this.y = y;
-        this.canvasHeight = canvasHeight;
+        this.name = 'Node ' + String.fromCharCode(65 + id);
+        this.chain = [Sim.copy(genesis)];
         this.mempool = [];
-        this.chain = [{ index: 0, hash: '0000genesis', txs: [] }];
         this.isMining = false;
-        this.miningInterval = null;
-        this.tooltipTimeout = null;
-        
+        this.generation = 0;
         this.render();
     }
-
     render() {
         this.el = document.createElement('div');
         this.el.className = 'node glass-panel';
-        this.el.style.left = `${this.x}px`;
-        this.el.style.top = `${this.y}px`;
-        
         this.tooltipEl = document.createElement('div');
         this.tooltipEl.className = 'node-tooltip';
-        this.el.appendChild(this.tooltipEl);
-
         this.contentEl = document.createElement('div');
         this.contentEl.className = 'node-content';
-        this.el.appendChild(this.contentEl);
-        
-        this.updateUI();
+        this.el.append(this.tooltipEl, this.contentEl);
         nodesContainer.appendChild(this.el);
+        this.updateUI();
     }
-
     updateUI() {
-        const mempoolHTML = this.mempool.map(tx => `<div class="tx-item">${tx}</div>`).join('') || '<div style="color:var(--text-muted)">Empty</div>';
-        const chainHTML = this.chain.slice().reverse().map(b => 
-            `<div class="block-item">
-                <span>Block #${b.index}</span>
-                <span class="hash-preview">${b.hash.substring(0,8)}…</span>
-            </div>`
-        ).join('');
-
-        this.contentEl.innerHTML = `
-            <div class="node-header">
-                <span class="node-title">${this.name}</span>
-                <span class="node-status">${this.isMining ? 'Mining…' : 'Idle'}</span>
-            </div>
-            <div class="mining-indicator"><div class="mining-progress"></div></div>
-            <div class="node-section">
-                <h4>Mempool</h4>
-                <div class="mempool-list">${mempoolHTML}</div>
-            </div>
-            <div class="node-section">
-                <h4>Blockchain</h4>
-                <div class="chain-list">${chainHTML}</div>
-            </div>
-        `;
-
-        if (this.isMining) {
-            this.el.classList.add('mining');
-        } else {
-            this.el.classList.remove('mining');
-        }
-    }
-
-    showTooltip(message, duration = 3000, colorClass = '') {
-        this.tooltipEl.textContent = message;
-        
-        // If node is in the top 40% of canvas, show tooltip BELOW the node
-        const isTopNode = this.y < this.canvasHeight * 0.4;
-        const posClass = isTopNode ? 'tooltip-bottom' : '';
-        this.tooltipEl.className = `node-tooltip show ${colorClass} ${posClass}`;
-        
-        clearTimeout(this.tooltipTimeout);
-        this.tooltipTimeout = setTimeout(() => {
-            this.tooltipEl.classList.remove('show');
-        }, duration);
-    }
-
-    // Check if a tx is already confirmed in the blockchain
-    txExistsInChain(tx) {
-        for (let i = 1; i < this.chain.length; i++) {
-            if (this.chain[i].txs && this.chain[i].txs.includes(tx)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    receiveTx(tx) {
-        // DOUBLE-SPEND CHECK: Reject if TX already in blockchain
-        if (this.txExistsInChain(tx)) {
-            this.showTooltip(`❌ REJECTED: Already in chain!`, 5000, 'tooltip-red');
-            this.el.classList.add('rejected');
-            setTimeout(() => this.el.classList.remove('rejected'), 1500);
-            logActivity(`🚫 [Security] ${this.name} rejected double-spend of '${tx}'`, 'log-security');
-            return; // Do NOT gossip it further
-        }
-
-        if (!this.mempool.includes(tx)) {
-            this.mempool.push(tx);
-            this.updateUI();
-            this.showTooltip("1. Received TX → Mempool", 4000, 'tooltip-purple');
-            
-            setTimeout(() => this.startMining(), 2500);
-            
-            // Gossip to neighbors
-            setTimeout(() => {
-                this.showTooltip("Gossiping TX to peers…", 3000, 'tooltip-purple');
-                const targets = getNeighbors(this.id);
-                targets.forEach(targetId => {
-                    animatePacket(this.id, targetId, 'tx', () => {
-                        nodes[targetId].receiveTx(tx);
-                    });
-                });
-            }, GOSSIP_DELAY);
-        }
-    }
-
-    // Attempt a double-spend (for the demo button)
-    attemptDoubleSpend(tx) {
-        this.showTooltip(`⚠️ Double-spend attempt: ${tx}`, 5000, 'tooltip-red');
-        logActivity(`🕵️ [Attack] Attacker re-submits '${tx}' to ${this.name}…`, 'log-security');
-        
-        // Send the TX into the network — nodes will reject it
-        setTimeout(() => {
-            // Gossip the fraudulent TX to all neighbors
-            const targets = getNeighbors(this.id);
-            targets.forEach(targetId => {
-                animatePacket(this.id, targetId, 'rejected-packet', () => {
-                    nodes[targetId].receiveTx(tx);
-                    // Continue spreading so all nodes get a chance to reject
-                    setTimeout(() => {
-                        const nextTargets = getNeighbors(targetId);
-                        nextTargets.forEach(nextId => {
-                            animatePacket(targetId, nextId, 'rejected-packet', () => {
-                                nodes[nextId].receiveTx(tx);
-                            });
-                        });
-                    }, GOSSIP_DELAY);
-                });
-            });
-        }, 800);
-    }
-
-    startMining() {
-        if (this.isMining || this.mempool.length === 0) return;
-        this.isMining = true;
-        this.updateUI();
-        
-        this.showTooltip("2. Solving Block (PoW)…", 8000, 'tooltip-blue');
-
-        const mineTime = Math.random() * (MINING_TIME_MAX - MINING_TIME_MIN) + MINING_TIME_MIN;
-        
-        this.miningInterval = setTimeout(() => {
-            if (!this.isMining) return;
-            this.mineBlock();
-        }, mineTime);
-    }
-
-    stopMining() {
-        this.isMining = false;
-        clearTimeout(this.miningInterval);
-        this.updateUI();
-    }
-
-    mineBlock() {
-        this.stopMining();
-        
-        const block = {
-            index: this.chain.length,
-            hash: '0000' + Math.random().toString(16).substring(2, 8),
-            txs: [...this.mempool]
+        this.contentEl.replaceChildren();
+        const header = document.createElement('div');
+        header.className = 'node-header';
+        const title = document.createElement('span');
+        title.className = 'node-title';
+        title.textContent = this.name;
+        const status = document.createElement('span');
+        status.className = 'node-status';
+        status.textContent = this.isMining ? 'Mining…' : 'Idle';
+        header.append(title, status);
+        const indicator = document.createElement('div');
+        indicator.className = 'mining-indicator';
+        const progress = document.createElement('div');
+        progress.className = 'mining-progress';
+        indicator.appendChild(progress);
+        this.contentEl.append(header, indicator);
+        const section = (heading, className) => {
+            const outer = document.createElement('div');
+            outer.className = 'node-section';
+            const label = document.createElement('h4');
+            label.textContent = heading;
+            const list = document.createElement('div');
+            list.className = className;
+            outer.append(label, list);
+            this.contentEl.appendChild(outer);
+            return list;
         };
-
-        // Track the last mined TX for double-spend demo
-        if (block.txs.length > 0) {
-            lastMinedTx = block.txs[0];
+        const pending = section('Mempool (' + this.mempool.length + ')', 'mempool-list');
+        if (!this.mempool.length) pending.textContent = 'Empty';
+        for (const id of this.mempool) {
+            const row = document.createElement('div');
+            row.className = 'tx-item';
+            row.textContent = id;
+            pending.appendChild(row);
         }
-
-        logActivity(`🏆 [Proof of Work] ${this.name} solved Block #${block.index}! Broadcasting…`, 'log-mine');
-        this.showTooltip("3. Block Solved! Broadcasting.", 5000, 'tooltip-green');
-        
-        this.el.classList.add('success');
-        setTimeout(() => this.el.classList.remove('success'), 1500);
-
-        this.receiveBlock(block, this.name);
+        const blocks = section('Blockchain', 'chain-list');
+        for (const block of [...this.chain].reverse()) {
+            const row = document.createElement('div');
+            row.className = 'block-item';
+            const index = document.createElement('span');
+            index.textContent = 'Block #' + block.index;
+            const hash = document.createElement('span');
+            hash.className = 'hash-preview';
+            hash.textContent = block.hash.slice(0, 8) + '…';
+            row.append(index, hash);
+            blocks.appendChild(row);
+        }
+        this.el.classList.toggle('mining', this.isMining);
     }
-
-    receiveBlock(block, sourceName) {
-        const currentHeight = this.chain.length - 1;
-        
-        if (block.index > currentHeight) {
-            this.chain.push(block);
-            this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
-            this.stopMining();
-            this.updateUI();
-
-            if (sourceName !== this.name) {
-                this.showTooltip(`4. Validated Block #${block.index} ✓`, 5000, 'tooltip-green');
+    showTooltip(message, color = '') {
+        this.tooltipEl.textContent = message;
+        this.tooltipEl.className = 'node-tooltip show ' + color + (this.y < 180 ? ' tooltip-bottom' : '');
+        clearTimeout(this.tooltipTimeout);
+        this.tooltipTimeout = setTimeout(() => this.tooltipEl.classList.remove('show'), 3000);
+    }
+    hasConfirmed(id) {
+        return this.chain.some(block => block.transactions.some(tx => tx.id === id));
+    }
+    receiveTx(id, quiet = false) {
+        if (this.hasConfirmed(id)) {
+            if (!quiet) {
+                this.showTooltip('Replay rejected: already confirmed', 'tooltip-red');
+                logActivity(this.name + ' rejected replay of ' + id, 'log-security');
             }
-
-            if (this.mempool.length > 0) {
-                setTimeout(() => this.startMining(), 3000);
-            }
-
-            // Gossip block to peers
-            setTimeout(() => {
-                const targets = getNeighbors(this.id);
-                targets.forEach(targetId => {
-                    animatePacket(this.id, targetId, 'block', () => {
-                        nodes[targetId].receiveBlock(block, this.name);
-                    });
-                });
-            }, GOSSIP_DELAY);
-            
-        } else if (block.index === currentHeight && block.hash !== this.chain[currentHeight].hash) {
-            logActivity(`⚠️ [Fork] ${this.name} received conflicting Block #${block.index}.`, 'log-fork');
-            this.showTooltip("Fork! Resolving…", 5000, 'tooltip-red');
-            
-            if (block.hash > this.chain[currentHeight].hash) {
-                logActivity(`⚖️ [Consensus] ${this.name} adopted the stronger block.`, 'log-gossip');
-                this.chain[currentHeight] = block;
-                this.mempool = this.mempool.filter(tx => !block.txs.includes(tx));
+            return;
+        }
+        if (this.mempool.includes(id) || this.mempool.length >= 1000) return;
+        this.mempool.push(id);
+        this.mempool.sort();
+        this.updateUI();
+        this.showTooltip('Message added to mempool', 'tooltip-purple');
+        setTimeout(() => this.startMining(), 1800);
+        setTimeout(() => getNeighbors(this.id).forEach(target => {
+            animatePacket(this.id, target, 'tx', () => nodes[target].receiveTx(id, true));
+        }), GOSSIP_DELAY);
+    }
+    stopMining() {
+        this.generation++;
+        this.isMining = false;
+        clearTimeout(this.miningTimer);
+    }
+    startMining() {
+        if (this.isMining || !this.mempool.length || forkInProgress) return;
+        this.isMining = true;
+        const generation = ++this.generation;
+        this.updateUI();
+        this.showTooltip('Preparing proof of work…', 'tooltip-blue');
+        // Delay makes the animation readable; the hash search itself is real.
+        this.miningTimer = setTimeout(async () => {
+            try {
+                const base = Sim.copy(this.chain);
+                const block = await Sim.mine(base, this.mempool.slice(0, 100),
+                    () => generation !== this.generation || forkInProgress);
+                if (!block || generation !== this.generation) return;
+                lastMinedTx = block.transactions[0].id;
+                logActivity(this.name + ' mined block #' + block.index + ' (nonce ' + block.nonce + ')', 'log-mine');
+                await this.receiveChain([...base, block], this.name);
+            } catch (error) {
                 this.stopMining();
                 this.updateUI();
-            } else {
-                logActivity(`🛡️ [Consensus] ${this.name} kept its own block.`, 'log-gossip');
+                logActivity('Mining error: ' + error.message, 'log-security');
             }
-        } else if (block.index > currentHeight + 1) {
-            logActivity(`👑 [Longest Chain] ${this.name} synced to a longer chain!`, 'log-gossip');
-            this.showTooltip("Longest Chain wins! Syncing…", 7000, 'tooltip-green');
-            
-            this.chain = block.fullChainSnapshot;
-            this.mempool = [];
-            this.stopMining();
-            this.updateUI();
+        }, 2500 + Math.random() * 4000);
+    }
+    async receiveChain(chain, sourceName) {
+        // Snapshot first, then compare with the LIVE chain after async validation.
+        const candidate = Sim.copy(chain);
+        if (!await Sim.validChain(candidate) || !Sim.better(candidate, this.chain)) return false;
+        const fork = candidate.length === this.chain.length;
+        const pending = Sim.reconcile(this.chain, candidate, this.mempool);
+        if (pending.length > 1000) return false;
+        this.stopMining();
+        this.mempool = pending;
+        this.chain = candidate;
+        this.updateUI();
+        this.showTooltip(fork ? 'Fork resolved; orphan messages restored' : 'Validated chain adopted', 'tooltip-green');
+        logActivity(this.name + ' adopted height ' + (candidate.length - 1) + ' from ' + sourceName +
+            (fork ? ' using the smaller-hash tie-break' : ''), fork ? 'log-fork' : 'log-gossip');
+        if (!forkInProgress) {
+            this.broadcastChain();
+            setTimeout(() => this.startMining(), 1800);
         }
+        return true;
+    }
+    broadcastChain() {
+        const snapshot = Sim.copy(this.chain);
+        setTimeout(() => {
+            if (forkInProgress) return;
+            getNeighbors(this.id).forEach(target => animatePacket(this.id, target, 'block',
+                () => nodes[target].receiveChain(snapshot, this.name)));
+        }, GOSSIP_DELAY);
     }
 }
 
-// Layout: Elliptical (circular) with enough padding
-function initNetwork() {
-    const canvasRect = document.querySelector('.network-canvas').getBoundingClientRect();
-    const W = canvasRect.width;
-    const H = canvasRect.height;
-    const centerX = W / 2;
-    const centerY = H / 2;
-    
-    // Ellipse radii — spread wider horizontally, tighter vertically
-    const radiusX = Math.max(centerX - 130, 200);
-    const radiusY = Math.max(centerY - 140, 140);
-
-    for (let i = 0; i < NUM_NODES; i++) {
-        const angle = (i * 2 * Math.PI) / NUM_NODES - Math.PI / 2;
-        const x = centerX + radiusX * Math.cos(angle);
-        const y = centerY + 20 + radiusY * Math.sin(angle);
-        nodes.push(new Node(i, x, y, H));
+function getNeighbors(id) {
+    const others = nodes.map(node => node.id).filter(other => other !== id);
+    for (let i = others.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [others[i], others[j]] = [others[j], others[i]];
     }
-
-    // Draw SVG connections
-    let svgHTML = '';
-    for (let i = 0; i < NUM_NODES; i++) {
-        for (let j = i + 1; j < NUM_NODES; j++) {
-            svgHTML += `<line x1="${nodes[i].x}" y1="${nodes[i].y}" x2="${nodes[j].x}" y2="${nodes[j].y}" class="connection-line" />`;
-        }
-    }
-    svgContainer.innerHTML = svgHTML;
+    return others.slice(0, 2);
 }
-
-// Helpers
-function getNeighbors(nodeId) {
-    const others = [];
-    for (let i = 0; i < NUM_NODES; i++) {
-        if (i !== nodeId) others.push(i);
-    }
-    return others.sort(() => 0.5 - Math.random()).slice(0, 2);
-}
-
-function animatePacket(fromId, toId, type, onComplete) {
-    const start = nodes[fromId];
-    const end = nodes[toId];
-    
+function animatePacket(from, to, type, complete) {
     const packet = document.createElement('div');
-    packet.className = `packet ${type}`;
-    packet.style.left = `${start.x}px`;
-    packet.style.top = `${start.y}px`;
+    packet.className = 'packet ' + type;
+    packet.style.left = nodes[from].x + 'px';
+    packet.style.top = nodes[from].y + 'px';
     packetsContainer.appendChild(packet);
-
     const animation = packet.animate([
-        { left: `${start.x}px`, top: `${start.y}px` },
-        { left: `${end.x}px`, top: `${end.y}px` }
-    ], {
-        duration: PACKET_SPEED,
-        easing: 'ease-in-out'
-    });
-
-    animation.onfinish = () => {
-        packet.remove();
-        onComplete();
-    };
+        { left: nodes[from].x + 'px', top: nodes[from].y + 'px' },
+        { left: nodes[to].x + 'px', top: nodes[to].y + 'px' }
+    ], { duration: PACKET_SPEED, easing: 'ease-in-out' });
+    animation.onfinish = () => { packet.remove(); Promise.resolve(complete()).catch(error => logActivity(error.message, 'log-security')); };
 }
-
-function logActivity(msg, className = '') {
-    const li = document.createElement('li');
-    li.textContent = msg;
-    if (className) li.className = className;
-    activityLog.appendChild(li);
+function logActivity(message, className = '') {
+    const item = document.createElement('li');
+    item.textContent = message;
+    item.className = className;
+    activityLog.appendChild(item);
+    while (activityLog.children.length > 200) activityLog.firstChild.remove();
     activityLog.scrollTop = activityLog.scrollHeight;
 }
+function layout() {
+    const canvas = document.querySelector('.network-canvas');
+    canvas.style.minHeight = '';
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    const compact = width < 680 || height < 700;
+    const columns = width < 450 ? 1 : 2;
+    const rows = Math.ceil(NUM_NODES / columns);
+    canvas.classList.toggle('compact', compact);
+    if (compact) canvas.style.minHeight = rows * 230 + 'px';
+    else canvas.style.minHeight = '';
+    nodes.forEach((node, i) => {
+        if (compact) {
+            node.x = width * ((i % columns) + 0.5) / columns;
+            node.y = 120 + Math.floor(i / columns) * 230;
+        } else {
+            const angle = i * 2 * Math.PI / NUM_NODES - Math.PI / 2;
+            node.x = width / 2 + (width / 2 - 115) * Math.cos(angle);
+            node.y = height / 2 + (height / 2 - 145) * Math.sin(angle);
+        }
+        node.el.style.left = node.x + 'px';
+        node.el.style.top = node.y + 'px';
+    });
+    svgContainer.replaceChildren();
+    nodes.forEach((node, i) => nodes.slice(i + 1).forEach(other => {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        for (const [key, value] of Object.entries({ x1: node.x, y1: node.y, x2: other.x, y2: other.y })) line.setAttribute(key, value);
+        line.setAttribute('class', 'connection-line');
+        svgContainer.appendChild(line);
+    }));
+}
+function synchronize() {
+    if (forkInProgress) return;
+    // Periodic reconciliation repairs missed fanout messages, as in the backend.
+    nodes.forEach(node => getNeighbors(node.id).forEach(peer => {
+        node.receiveChain(nodes[peer].chain, nodes[peer].name).catch(error => logActivity(error.message));
+        nodes[peer].mempool.forEach(id => node.receiveTx(id, true));
+    }));
+}
 
-// === EVENT LISTENERS ===
-
-// Send Transaction
 document.getElementById('send-tx-btn').addEventListener('click', () => {
-    const txId = `tx_${Math.random().toString(36).substr(2, 4)}`;
-    logActivity(`📝 [Client] Sent transaction '${txId}' into the network.`, 'log-gossip');
-    
-    const randomNode = nodes[Math.floor(Math.random() * NUM_NODES)];
-    randomNode.receiveTx(txId);
+    const id = 'tx_' + crypto.randomUUID().slice(0, 8);
+    nodes[Math.floor(Math.random() * nodes.length)].receiveTx(id);
+    logActivity('Submitted ' + id, 'log-gossip');
 });
-
-// Double Spend Attack
-document.getElementById('double-spend-btn').addEventListener('click', () => {
-    if (!lastMinedTx) {
-        logActivity(`⏳ [Info] Send a transaction first and wait for it to be mined!`);
-        return;
+document.getElementById('replay-btn').addEventListener('click', () => {
+    if (!lastMinedTx) { logActivity('Submit a transaction and wait for confirmation first.'); return; }
+    logActivity('Replaying ' + lastMinedTx + '. This tests ID deduplication, not spending money.', 'log-security');
+    nodes.forEach(node => node.receiveTx(lastMinedTx));
+});
+document.getElementById('trigger-fork-btn').addEventListener('click', async () => {
+    if (forkInProgress) return;
+    forkInProgress = true;
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+        nodes.forEach(node => { node.stopMining(); node.updateUI(); });
+        const base = Sim.copy(nodes.reduce((best, node) => Sim.better(node.chain, best) ? node.chain : best, nodes[0].chain));
+        await Promise.all(nodes.map(node => node.receiveChain(base, 'fork setup')));
+        logActivity('Mining two different blocks on the same parent…', 'log-fork');
+        const suffix = crypto.randomUUID().slice(0, 8);
+        const [a, b] = await Promise.all([Sim.mine(base, ['fork_a_' + suffix]), Sim.mine(base, ['fork_b_' + suffix])]);
+        await Promise.all([nodes[0].receiveChain([...base, a], 'Node A'), nodes[2].receiveChain([...base, b], 'Node C')]);
+        logActivity('Equal-height fork: both blocks are valid. The smaller tip hash breaks the tie.', 'log-fork');
+        await new Promise(resolve => setTimeout(resolve, 3500));
+    } catch (error) { logActivity('Fork demo error: ' + error.message, 'log-security'); }
+    finally {
+        forkInProgress = false;
+        buttons.forEach(button => { button.disabled = false; });
+        nodes.forEach(node => { node.broadcastChain(); node.startMining(); });
+        synchronize();
     }
-    
-    logActivity(`🚨 [Attack] Attempting to double-spend '${lastMinedTx}'…`, 'log-security');
-    logActivity(`💡 [Info] This TX was already confirmed in the blockchain. Every honest node should reject it.`, 'log-security');
-    
-    // Pick a random node to submit the fraudulent TX
-    const attackNode = nodes[Math.floor(Math.random() * NUM_NODES)];
-    attackNode.attemptDoubleSpend(lastMinedTx);
 });
 
-// Simulate Fork
-document.getElementById('trigger-fork-btn').addEventListener('click', () => {
-    logActivity(`🚨 [Simulation] Triggering a forced network split…`, 'log-fork');
-    
-    const nodeA = nodes[0];
-    const nodeC = nodes[2];
-    
-    if (nodeA.mempool.length === 0) nodeA.mempool.push('tx_fork1');
-    if (nodeC.mempool.length === 0) nodeC.mempool.push('tx_fork2');
-
-    nodeA.mineBlock();
-    nodeC.mineBlock();
-
-    setTimeout(() => {
-        logActivity(`⚔️ [Simulation] Network is split! Waiting for a winner…`, 'log-fork');
-        
-        setTimeout(() => {
-            logActivity(`👑 [Simulation] Node A mined Block #${nodeA.chain.length}! Broadcasting Longest Chain…`, 'log-mine');
-            const winnerBlock = {
-                index: nodeA.chain.length,
-                hash: '0000winner',
-                txs: [],
-                fullChainSnapshot: JSON.parse(JSON.stringify(nodeA.chain))
-            };
-            winnerBlock.fullChainSnapshot.push({ index: winnerBlock.index, hash: winnerBlock.hash });
-            
-            nodeA.receiveBlock(winnerBlock, nodeA.name);
-        }, 8000);
-        
-    }, 4500);
+window.addEventListener('load', async () => {
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+        const genesis = await Sim.genesis();
+        for (let i = 0; i < NUM_NODES; i++) nodes.push(new Node(i, genesis));
+        layout();
+        buttons.forEach(button => { button.disabled = false; });
+        syncTimer = setInterval(synchronize, 5000);
+        logActivity('Browser simulation ready. SHA-256 hashes are real; animation delays are simulated.');
+    } catch (error) { logActivity('Cannot start: ' + error.message + '. Open via localhost or HTTPS.', 'log-security'); }
 });
-
-// Start
-window.addEventListener('load', initNetwork);
+window.addEventListener('resize', layout);
+window.addEventListener('pagehide', () => { clearInterval(syncTimer); nodes.forEach(node => node.stopMining()); });
